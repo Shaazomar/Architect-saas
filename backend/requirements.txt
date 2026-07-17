@@ -3,6 +3,7 @@ httpx==0.28.1
 manifold3d==3.5.2
 networkx==3.6.1
 numpy==2.5.1
+opencv-python-headless==5.0.0.93
 pillow==12.3.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
