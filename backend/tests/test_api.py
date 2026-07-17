@@ -62,6 +62,24 @@ def test_security_headers_present(client):
     assert resp.headers["X-Frame-Options"] == "DENY"
 
 
+def test_multi_format_export(client, plan_png):
+    job_id = client.post(
+        "/api/v1/plans", files={"file": ("plan.png", plan_png, "image/png")}
+    ).json()["job_id"]
+
+    status = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert status["status"] == "done"
+    assert len(status["result"]["furniture"]) > 0
+    assert status["result"]["reports"]["cost_estimate"]["total"] > 0
+
+    for fmt in ("glb", "obj", "stl", "ply"):
+        resp = client.get(f"/api/v1/jobs/{job_id}/model.{fmt}")
+        assert resp.status_code == 200, fmt
+        assert len(resp.content) > 500, fmt
+    assert client.get(f"/api/v1/jobs/{job_id}/model.exe").status_code == 404
+    assert client.get(f"/api/v1/jobs/{job_id}/model.%2e%2e").status_code == 404
+
+
 def test_rate_limit_kicks_in(client):
     # Bucket capacity is settings.rate_limit_per_minute (60); drain it.
     codes = [client.get("/api/v1/jobs/x").status_code for _ in range(70)]

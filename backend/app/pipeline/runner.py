@@ -11,6 +11,7 @@ from .graph import build_graph
 from .ocr import NullOcr, OcrEngine
 from .preprocess import preprocess
 from .reconstruct import reconstruct
+from .reports import build_reports
 from .types import PipelineResult
 from .validate import validate
 from .vectorize import vectorize
@@ -55,4 +56,6 @@ def run_pipeline(
         adjacency=adjacency,
         validation=validation,
         stats=recon.stats,
+        furniture=recon.furniture,
+        reports=build_reports(plan_graph, recon),
     )

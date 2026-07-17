@@ -57,3 +57,52 @@ def test_rejects_tiny_image():
 def test_explicit_scale_overrides_estimate(plan_png):
     result = run_pipeline(plan_png, meters_per_px=0.01)
     assert result.stats["meters_per_px"] == 0.01
+
+
+def test_furniture_is_placed_legally():
+    from shapely.geometry import box
+
+    from app.pipeline.furniture import place_furniture
+
+    room = box(0, 0, 5.0, 4.0)
+    placed = place_furniture(0, "bedroom", room)
+
+    assert {p.name for p in placed} == {"bed", "wardrobe", "desk"}
+    for p in placed:
+        assert p.footprint.within(room), f"{p.name} pokes outside the room"
+    for i, a in enumerate(placed):
+        for b in placed[i + 1 :]:
+            assert not a.footprint.intersects(b.footprint), f"{a.name} collides with {b.name}"
+            assert a.footprint.distance(b.footprint) >= 0.4  # circulation preserved
+
+
+def test_furniture_skipped_when_room_too_small():
+    from shapely.geometry import box
+
+    from app.pipeline.furniture import place_furniture
+
+    closet = box(0, 0, 0.6, 0.6)
+    assert place_furniture(0, "bedroom", closet) == []
+
+
+def test_reports_and_furniture_in_pipeline_result(plan_png):
+    result = run_pipeline(plan_png)
+
+    schedule = result.reports["room_schedule"]
+    assert len(schedule) == 3
+    assert all(r["perimeter_m"] > 0 for r in schedule)
+
+    materials = result.reports["materials"]
+    assert materials["concrete_total_m3"] > 0
+    assert materials["paint_area_m2"] > 0
+
+    cost = result.reports["cost_estimate"]
+    assert cost["total"] > 0 and cost["currency"] == "INR"
+    assert "disclaimer" in cost
+
+    assert len(result.furniture) > 0
+    # Furniture nodes really exist in the exported scene.
+    scene = trimesh.load(io.BytesIO(result.glb), file_type="glb")
+    furn_nodes = [n for n in scene.geometry if n.startswith("furniture_")]
+    assert len(furn_nodes) == len(result.furniture)
+    assert any(n.startswith("roof_") for n in scene.geometry)

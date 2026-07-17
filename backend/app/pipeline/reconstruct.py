@@ -12,6 +12,7 @@ from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 from ..config import settings
+from .furniture import place_furniture
 from .types import ReconstructionResult, VectorPlan
 
 _LABEL_COLORS = {
@@ -42,7 +43,12 @@ def _to_gltf_frame(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return mesh
 
 
-def reconstruct(vector: VectorPlan, meters_per_px: float | None = None) -> ReconstructionResult:
+def reconstruct(
+    vector: VectorPlan,
+    meters_per_px: float | None = None,
+    include_furniture: bool = True,
+    include_roof: bool = True,
+) -> ReconstructionResult:
     scale = meters_per_px or (settings.wall_thickness_m / vector.wall_thickness_px)
 
     def to_m(geom):
@@ -72,6 +78,37 @@ def reconstruct(vector: VectorPlan, meters_per_px: float | None = None) -> Recon
             name = f"room_{room.id}_{room.label}"
             scene.add_geometry(_to_gltf_frame(m), node_name=name, geom_name=name)
 
+    # Roof/ceiling slab on top of the walls, as separately named geometry so
+    # viewers can toggle it and look into the rooms.
+    if include_roof:
+        for i, m in enumerate(_extrude(footprint, settings.roof_thickness_m)):
+            m.apply_translation((0, 0, settings.wall_height_m))
+            m.visual.face_colors = (188, 184, 178, 255)
+            scene.add_geometry(_to_gltf_frame(m), node_name=f"roof_{i}", geom_name=f"roof_{i}")
+
+    # Constraint-based furniture, placed in the same meter frame the meshes
+    # are built in.
+    furniture_report: list[dict] = []
+    if include_furniture:
+        for room in vector.rooms:
+            room_m = to_m(room.polygon)
+            for idx, item in enumerate(place_furniture(room.id, room.label, room_m)):
+                for m in _extrude(item.footprint, item.height):
+                    m.visual.face_colors = item.color
+                    name = f"furniture_{item.room_id}_{item.name}_{idx}"
+                    scene.add_geometry(_to_gltf_frame(m), node_name=name, geom_name=name)
+                cx, cy = item.footprint.centroid.coords[0]
+                furniture_report.append(
+                    {
+                        "room_id": item.room_id,
+                        "room_label": item.room_label,
+                        "item": item.name,
+                        "height_m": item.height,
+                        "footprint_m2": round(item.footprint.area, 2),
+                        "position_m": [round(cx, 2), round(cy, 2)],
+                    }
+                )
+
     glb = scene.export(file_type="glb")
     if isinstance(glb, str):
         glb = glb.encode()
@@ -83,5 +120,9 @@ def reconstruct(vector: VectorPlan, meters_per_px: float | None = None) -> Recon
         "room_count": len(vector.rooms),
         "bounds_m": bounds.tolist() if bounds is not None else None,
         "wall_volume_m3": float(sum(m.volume for m in wall_meshes)),
+        "footprint_area_m2": float(footprint.area),
+        "furniture_count": len(furniture_report),
     }
-    return ReconstructionResult(scene_glb=glb, meters_per_px=scale, stats=stats)
+    return ReconstructionResult(
+        scene_glb=glb, meters_per_px=scale, stats=stats, furniture=furniture_report
+    )

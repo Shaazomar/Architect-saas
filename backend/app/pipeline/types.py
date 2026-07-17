@@ -64,6 +64,7 @@ class ReconstructionResult:
     scene_glb: bytes
     meters_per_px: float
     stats: dict[str, Any] = field(default_factory=dict)
+    furniture: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -73,3 +74,5 @@ class PipelineResult:
     adjacency: list[dict[str, Any]]
     validation: dict[str, Any]
     stats: dict[str, Any]
+    furniture: list[dict[str, Any]] = field(default_factory=list)
+    reports: dict[str, Any] = field(default_factory=dict)

@@ -23,12 +23,20 @@ class Settings(BaseSettings):
     # --- rate limiting (per client IP, token bucket) ---
     rate_limit_per_minute: int = 60
 
-    # --- reconstruction defaults ---
-    wall_height_m: float = 2.7
-    slab_thickness_m: float = 0.10
-    # Assumed real-world thickness of the walls detected in the drawing; used to
-    # derive the pixel->meter scale when the plan carries no explicit scale.
+    # --- reconstruction defaults (per architectural standards) ---
+    wall_height_m: float = 3.0        # floor-to-ceiling 3000 mm
+    slab_thickness_m: float = 0.15    # floor slab 150 mm
+    roof_thickness_m: float = 0.15    # roof/ceiling slab 150 mm
+    # Assumed real-world thickness of the (exterior, 230 mm) walls detected in
+    # the drawing; used to derive the pixel->meter scale when the plan carries
+    # no explicit scale annotation.
     wall_thickness_m: float = 0.23
+
+    # --- indicative construction rates for the cost report ---
+    currency: str = "INR"
+    rate_concrete_per_m3: float = 7500.0
+    rate_flooring_per_m2: float = 1300.0
+    rate_paint_per_m2: float = 40.0
 
 
 settings = Settings()

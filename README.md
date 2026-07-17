@@ -33,9 +33,13 @@ with `python -m app.devtools.sample_plan`.
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/v1/plans` | Upload a PNG/JPEG plan (multipart `file`, optional `?meters_per_px=`). Returns `202 {job_id}`. |
-| GET | `/api/v1/jobs/{id}` | Job status, detected rooms, adjacency graph, validation report. |
-| GET | `/api/v1/jobs/{id}/model.glb` | The reconstructed 3D model. |
+| GET | `/api/v1/jobs/{id}` | Job status, rooms, adjacency graph, validation, furniture report, room schedule, material take-off, cost estimate. |
+| GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `obj`, `stl`, or `ply`. |
 | GET | `/health` | Liveness probe (public, unauthenticated). |
+
+Geometry follows architectural standards: 230 mm exterior walls (scale
+reference), 3000 mm floor-to-ceiling height, 150 mm floor and roof slabs. The
+roof is exported as separately named geometry so viewers can toggle it.
 
 ## Architecture
 
@@ -47,7 +51,10 @@ backend/app/pipeline/        one module per stage, typed contracts between them
   graph.py        room-connectivity graph (doors = openings)
   classify.py     room labels      ← ML plug-in point (GraphSAGE/GCN)
   ocr.py          text/scale       ← ML plug-in point (PaddleOCR/TrOCR)
-  reconstruct.py  2D → 3D (Trimesh), pixel → meter scaling
+  furniture.py    constraint-based placement: wall alignment, collision
+                  detection, circulation clearance — illegal spots are skipped
+  reconstruct.py  2D → 3D (Trimesh): walls, slab, roof, furniture; px → m scaling
+  reports.py      room schedule, material take-off, indicative cost estimate
   validate.py     mesh integrity, scale plausibility, room reachability
   runner.py       orchestrator — pure function, Celery-ready
 ```
@@ -84,9 +91,14 @@ storage (MinIO/R2) for artifacts, and Postgres instead of the SQLite job store
 | 3D reconstruction + GLB export | ✅ working | `reconstruct.py` |
 | Validation suite | ✅ working | `validate.py` |
 | Web viewer (R3F) | ✅ working | `frontend/` |
+| Furniture AI (constraint-based, collision-checked) | ✅ working | `furniture.py` |
+| Roof/ceiling generation (toggleable) | ✅ working | `reconstruct.py` |
+| Multi-format export (GLB/OBJ/STL/PLY) | ✅ working | `api/routes.py` |
+| Room schedule, material take-off, cost estimate | ✅ working | `reports.py` |
 | Doors/windows/stairs detectors (YOLO/SAM2) | ⬜ | `detect.py` contract |
 | OCR: room names, dimensions, scale | ⬜ | `ocr.py` contract |
 | GNN room classifier | ⬜ | `classify.py` contract |
-| IFC / USD / FBX export | ⬜ | `reconstruct.py` (IfcOpenShell) |
+| IFC / USD / FBX / STEP export | ⬜ | `reconstruct.py` (IfcOpenShell/OpenCascade) |
+| PBR materials, style presets, lighting | ⬜ | new stage after `reconstruct` |
+| Photorealistic renders + walkthrough video | ⬜ | headless Blender stage |
 | Celery + RabbitMQ workers | ⬜ | `runner.py` is already a pure function |
-| Furniture placement, materials, costing | ⬜ | new stages after `reconstruct` |
