@@ -1,0 +1,75 @@
+"""Shared data contracts between pipeline stages.
+
+Every stage consumes and returns these types only, so any stage can be swapped
+(e.g. the morphological wall detector for a trained segmentation model)
+without touching its neighbours.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+import networkx as nx
+import numpy as np
+from shapely.geometry import MultiPolygon, Polygon
+
+
+@dataclass
+class PreprocessedPlan:
+    """Output of the preprocessing stage."""
+
+    ink: np.ndarray          # uint8 binary mask, 255 = drawn ink, 0 = paper
+    width: int
+    height: int
+
+
+@dataclass
+class DetectedStructure:
+    """Output of the structure-detection stage (walls today; doors/windows/
+    columns join here when the ML detectors land)."""
+
+    wall_mask: np.ndarray            # uint8 binary mask, 255 = wall
+    wall_thickness_px: float         # estimated dominant wall thickness
+
+
+@dataclass
+class Room:
+    id: int
+    polygon: Polygon                 # in pixel coordinates until reconstruction
+    label: str = "room"
+    area_px: float = 0.0
+
+
+@dataclass
+class VectorPlan:
+    """Vectorized 2D geometry of the plan (pixel coordinates)."""
+
+    walls: MultiPolygon
+    rooms: list[Room]
+    wall_thickness_px: float
+
+
+@dataclass
+class PlanGraph:
+    """Room-connectivity graph. Nodes are room ids; an edge means the rooms
+    share a wall, with ``opening=True`` when free space connects them (a door
+    or open passage)."""
+
+    graph: nx.Graph
+    rooms: list[Room]
+
+
+@dataclass
+class ReconstructionResult:
+    scene_glb: bytes
+    meters_per_px: float
+    stats: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PipelineResult:
+    glb: bytes
+    rooms: list[dict[str, Any]]
+    adjacency: list[dict[str, Any]]
+    validation: dict[str, Any]
+    stats: dict[str, Any]

@@ -1,0 +1,14 @@
+fastapi==0.139.2
+httpx==0.28.1
+manifold3d==3.5.2
+networkx==3.6.1
+numpy==2.5.1
+pillow==12.3.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+pytest==9.1.1
+python-multipart==0.0.32
+shapely==2.1.2
+trimesh==4.12.2
+uvicorn==0.51.0
+scipy==1.18.0
