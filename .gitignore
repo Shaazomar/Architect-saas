@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+backend/data/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Environment & secrets — never commit these
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
