@@ -46,9 +46,14 @@ def _to_gltf_frame(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 def reconstruct(
     vector: VectorPlan,
     meters_per_px: float | None = None,
-    include_furniture: bool = True,
+    furniture_mode: str = "detected",
+    detected_objects: list | None = None,
     include_roof: bool = True,
 ) -> ReconstructionResult:
+    """furniture_mode: "detected" reconstructs symbols found in the drawing at
+    their exact drawn footprint and pose (fidelity mandate — nothing invented);
+    "generated" opts into catalog-based placement for empty plans; "none"
+    skips furniture."""
     scale = meters_per_px or (settings.wall_thickness_m / vector.wall_thickness_px)
 
     def to_m(geom):
@@ -86,10 +91,33 @@ def reconstruct(
             m.visual.face_colors = (188, 184, 178, 255)
             scene.add_geometry(_to_gltf_frame(m), node_name=f"roof_{i}", geom_name=f"roof_{i}")
 
-    # Constraint-based furniture, placed in the same meter frame the meshes
-    # are built in.
     furniture_report: list[dict] = []
-    if include_furniture:
+    if furniture_mode == "detected" and detected_objects:
+        # Exact-position rule: extrude each symbol's own drawn footprint.
+        for obj in detected_objects:
+            fp_m = to_m(obj.footprint_px)
+            for m in _extrude(fp_m, obj.height_m):
+                m.visual.face_colors = (150, 128, 108, 255)
+                name = f"furniture_{obj.room_id}_{obj.category}_{obj.id}"
+                scene.add_geometry(_to_gltf_frame(m), node_name=name, geom_name=name)
+            cx, cy = fp_m.centroid.coords[0]
+            furniture_report.append(
+                {
+                    "room_id": obj.room_id,
+                    "room_label": obj.room_label,
+                    "item": obj.category,
+                    "source": "detected",
+                    "confidence": obj.confidence,
+                    "size_m": list(obj.size_m),
+                    "rotation_deg": obj.rotation_deg,
+                    "height_m": obj.height_m,
+                    "footprint_m2": round(fp_m.area, 2),
+                    "position_m": [round(cx, 2), round(cy, 2)],
+                }
+            )
+    elif furniture_mode == "generated":
+        # Opt-in catalog placement (constraint-based) for plans drawn without
+        # furniture symbols.
         for room in vector.rooms:
             room_m = to_m(room.polygon)
             for idx, item in enumerate(place_furniture(room.id, room.label, room_m)):
@@ -103,6 +131,8 @@ def reconstruct(
                         "room_id": item.room_id,
                         "room_label": item.room_label,
                         "item": item.name,
+                        "source": "generated",
+                        "confidence": None,
                         "height_m": item.height,
                         "footprint_m2": round(item.footprint.area, 2),
                         "position_m": [round(cx, 2), round(cy, 2)],

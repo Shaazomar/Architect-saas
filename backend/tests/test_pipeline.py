@@ -85,8 +85,51 @@ def test_furniture_skipped_when_room_too_small():
     assert place_furniture(0, "bedroom", closet) == []
 
 
-def test_reports_and_furniture_in_pipeline_result(plan_png):
+def test_openings_detected_from_wall_gaps(plan_png):
     result = run_pipeline(plan_png)
+
+    # The sample plan has exactly two door gaps (one per partition).
+    assert len(result.openings) == 2
+    for op in result.openings:
+        assert 1.0 <= op["width_m"] <= 2.2
+        assert len(op["rooms"]) == 2
+        assert op["confidence"] > 0
+    assert result.validation["opening_count"] == 2
+    assert result.validation["window_count"] == 0
+    assert any("wall thickness" in w for w in result.validation["warnings"])
+
+
+def test_detected_furniture_matches_drawn_symbols(plan_png):
+    """Fidelity mandate: only the two symbols drawn in the sample (a rectangle
+    in the living room, a circle in the bathroom) become objects — the text
+    labels and dimension lines must not."""
+    result = run_pipeline(plan_png)  # default mode is "detected"
+
+    assert len(result.furniture) == 2
+    assert all(f["source"] == "detected" for f in result.furniture)
+    by_room = {f["room_label"]: f for f in result.furniture}
+    assert set(by_room) == {"living_room", "bathroom"}
+    assert by_room["bathroom"]["item"] == "round_table"  # the drawn circle
+    assert all(0 < f["confidence"] <= 1 for f in result.furniture)
+
+    rooms_in_graph = result.scene_graph["building"]["rooms"]
+    assert sum(len(r["objects"]) for r in rooms_in_graph) == 2
+
+
+def test_generated_furniture_is_explicit_opt_in(plan_png):
+    result = run_pipeline(plan_png, furniture_mode="generated")
+    assert len(result.furniture) >= 6
+    assert all(f["source"] == "generated" for f in result.furniture)
+
+    none = run_pipeline(plan_png, furniture_mode="none")
+    assert none.furniture == []
+
+    with pytest.raises(ValueError):
+        run_pipeline(plan_png, furniture_mode="invent")
+
+
+def test_reports_and_furniture_in_pipeline_result(plan_png):
+    result = run_pipeline(plan_png, furniture_mode="generated")
 
     schedule = result.reports["room_schedule"]
     assert len(schedule) == 3

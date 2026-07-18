@@ -76,3 +76,5 @@ class PipelineResult:
     stats: dict[str, Any]
     furniture: list[dict[str, Any]] = field(default_factory=list)
     reports: dict[str, Any] = field(default_factory=dict)
+    openings: list[dict[str, Any]] = field(default_factory=list)
+    scene_graph: dict[str, Any] = field(default_factory=dict)

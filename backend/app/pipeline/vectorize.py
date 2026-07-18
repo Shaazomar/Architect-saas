@@ -41,16 +41,20 @@ def _mask_to_polygons(mask: np.ndarray, min_area: float) -> list[Polygon]:
     return polys
 
 
+def seal_walls(walls: np.ndarray, thickness: float) -> np.ndarray:
+    """Close door/passage gaps in the wall mask. Door openings are ~4x wall
+    thickness in practice; 7x with margin makes the closing bridge every
+    opening so rooms separate cleanly. Also used by the openings detector:
+    sealed minus original walls = exactly the openings."""
+    seal = max(3, int(round(thickness * 7)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (seal, seal))
+    return cv2.morphologyEx(walls, cv2.MORPH_CLOSE, kernel)
+
+
 def _room_free_space(plan: PreprocessedPlan, walls: np.ndarray, thickness: float) -> np.ndarray:
     """Interior free space: seal door openings, then flood-fill away the
     exterior so only enclosed rooms remain."""
-    # Door openings are ~4x wall thickness in practice; 7x with margin makes
-    # the closing bridge every door/passage so rooms separate cleanly.
-    seal = max(3, int(round(thickness * 7)) | 1)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (seal, seal))
-    sealed = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, kernel)
-
-    free = cv2.bitwise_not(sealed)
+    free = cv2.bitwise_not(seal_walls(walls, thickness))
     # Flood fill from every border pixel to remove the outside world.
     ff_mask = np.zeros((plan.height + 2, plan.width + 2), np.uint8)
     flooded = free.copy()

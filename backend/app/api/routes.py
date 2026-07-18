@@ -11,6 +11,8 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
+from typing import Literal
+
 from .. import store
 from ..config import settings
 from ..pipeline.preprocess import PlanImageError
@@ -33,10 +35,10 @@ def _sniff(head: bytes) -> str | None:
     return None
 
 
-def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None) -> None:
+def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furniture_mode: str) -> None:
     store.update_job(job_id, "processing")
     try:
-        result = run_pipeline(image_bytes, meters_per_px=meters_per_px)
+        result = run_pipeline(image_bytes, meters_per_px=meters_per_px, furniture_mode=furniture_mode)
         job = store.get_job(job_id)
         assert job is not None
         (job.dir / "model.glb").write_bytes(result.glb)
@@ -50,6 +52,8 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None) -> No
                 "stats": result.stats,
                 "furniture": result.furniture,
                 "reports": result.reports,
+                "openings": result.openings,
+                "scene_graph": result.scene_graph,
             },
         )
     except PlanImageError as exc:
@@ -65,6 +69,7 @@ async def upload_plan(
     file: UploadFile,
     background: BackgroundTasks,
     meters_per_px: float | None = Query(default=None, gt=0, le=1.0),
+    furniture: Literal["detected", "generated", "none"] = Query(default="detected"),
 ):
     # Read one byte past the cap so we can distinguish "at limit" from "over".
     data = await file.read(settings.max_upload_bytes + 1)
@@ -75,7 +80,7 @@ async def upload_plan(
 
     job = store.create_job()
     (job.dir / "plan.png").write_bytes(data)
-    background.add_task(_process, job.id, data, meters_per_px)
+    background.add_task(_process, job.id, data, meters_per_px, furniture)
     return {"job_id": job.id, "status": job.status}
 
 
