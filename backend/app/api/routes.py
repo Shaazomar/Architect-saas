@@ -43,8 +43,9 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
         job = store.get_job(job_id)
         assert job is not None
         (job.dir / "model.glb").write_bytes(result.glb)
-        # Stage 1 artifact: detection-only analysis, its own deliverable.
+        # Stage artifacts: each stage's output is its own deliverable.
         (job.dir / "analysis.json").write_text(json.dumps(result.analysis, indent=2))
+        (job.dir / "rooms.json").write_text(json.dumps(result.rooms_detail, indent=2))
         store.update_job(
             job_id,
             "done",
@@ -118,15 +119,23 @@ def _convert_model(glb_path, fmt: str) -> bytes:
     return data.encode() if isinstance(data, str) else data
 
 
-@router.get("/jobs/{job_id}/analysis.json")
-def job_analysis(job_id: str):
+# Whitelisted per-stage artifacts. User input never reaches the filesystem:
+# the name must be an exact key here and the job id must exist in the store.
+_STAGE_ARTIFACTS = {"analysis.json", "rooms.json"}
+
+
+@router.get("/jobs/{job_id}/{artifact}.json")
+def job_stage_artifact(job_id: str, artifact: str):
+    filename = f"{artifact}.json"
+    if filename not in _STAGE_ARTIFACTS:
+        raise HTTPException(404, "Unknown artifact.")
     job = store.get_job(job_id)
     if job is None or job.status != "done":
-        raise HTTPException(404, "Analysis not available.")
-    path = job.dir / "analysis.json"
+        raise HTTPException(404, "Artifact not available.")
+    path = job.dir / filename
     if not path.is_file():
-        raise HTTPException(404, "Analysis not available.")
-    return FileResponse(path, media_type="application/json", filename="analysis.json")
+        raise HTTPException(404, "Artifact not available.")
+    return FileResponse(path, media_type="application/json", filename=filename)
 
 
 @router.get("/jobs/{job_id}/model.{fmt}")

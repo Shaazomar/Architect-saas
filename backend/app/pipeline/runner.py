@@ -41,7 +41,6 @@ def run_pipeline(
     structure = detect_structure(plan)
     vector = vectorize(plan, structure)
     plan_graph = build_graph(plan, structure, vector)
-    plan_graph = classify_rooms(plan_graph)
 
     ocr_result = ocr.read(plan.ink)
     scale = meters_per_px or ocr_result.meters_per_px
@@ -49,10 +48,12 @@ def run_pipeline(
         "ocr" if ocr_result.meters_per_px else "wall_thickness_assumption"
     )
 
-    # Effective scale is needed by the detectors even when it is inferred.
+    # Effective scale is needed by the classifier/detectors even when inferred.
     from ..config import settings
 
     effective_scale = scale or (settings.wall_thickness_m / vector.wall_thickness_px)
+
+    plan_graph = classify_rooms(plan_graph, effective_scale)
 
     openings = detect_openings(plan, structure, vector, effective_scale)
     detected = detect_symbols(plan, structure, vector, effective_scale)
@@ -69,8 +70,9 @@ def run_pipeline(
         {
             "id": r.id,
             "label": r.label,
-            "label_confidence": 0.5,           # heuristic until the GNN lands
-            "label_source": "heuristic",
+            "label_confidence": r.label_confidence,
+            "label_source": "heuristic",       # OCR/GNN stages will override
+            "evidence": r.evidence,
             "area_m2": round(r.area_px * recon.meters_per_px**2, 2),
             "centroid_px": [round(c, 1) for c in r.polygon.centroid.coords[0]],
         }
@@ -92,6 +94,35 @@ def run_pipeline(
         }
         for o in openings
     ]
+
+    # Stage 2 artifact — Room Detector: every room with polygon, center, name,
+    # area, doors, windows (pending), adjacency and confidence + evidence.
+    rooms_detail = {
+        "stage": "room_detection",
+        "classifier": "heuristic_rules",
+        "rooms": [
+            {
+                "id": r.id,
+                "name": r.label,
+                "confidence": r.label_confidence,
+                "evidence": r.evidence,
+                "polygon_px": [[round(x, 1), round(y, 1)] for x, y in r.polygon.exterior.coords],
+                "center_px": [round(c, 1) for c in r.polygon.centroid.coords[0]],
+                "center_m": [
+                    round(r.polygon.centroid.x * effective_scale, 2),
+                    round(r.polygon.centroid.y * effective_scale, 2),
+                ],
+                "area_m2": round(r.area_px * effective_scale**2, 2),
+                "perimeter_m": round(r.polygon.exterior.length * effective_scale, 2),
+                "doors": [o["id"] for o in openings_out if r.id in o["rooms"]],
+                "windows": {"items": [], "status": "pending_ml_detector"},
+                "adjacent_rooms": sorted(plan_graph.graph.neighbors(r.id))
+                if r.id in plan_graph.graph
+                else [],
+            }
+            for r in plan_graph.rooms
+        ],
+    }
 
     # Stage 1 artifact — Floor Plan Analyzer: detection only, no geometry.
     # Element classes we cannot detect yet are empty lists, never guesses;
@@ -198,4 +229,5 @@ def run_pipeline(
         openings=openings_out,
         scene_graph=scene_graph,
         analysis=analysis,
+        rooms_detail=rooms_detail,
     )

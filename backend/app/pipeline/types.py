@@ -38,6 +38,8 @@ class Room:
     polygon: Polygon                 # in pixel coordinates until reconstruction
     label: str = "room"
     area_px: float = 0.0
+    label_confidence: float = 0.0
+    evidence: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,3 +82,5 @@ class PipelineResult:
     scene_graph: dict[str, Any] = field(default_factory=dict)
     # Stage 1 (Floor Plan Analyzer) artifact: pure detection, no geometry.
     analysis: dict[str, Any] = field(default_factory=dict)
+    # Stage 2 (Room Detector) artifact: per-room semantics.
+    rooms_detail: dict[str, Any] = field(default_factory=dict)

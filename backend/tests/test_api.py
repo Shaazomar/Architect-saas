@@ -92,6 +92,11 @@ def test_analysis_artifact_endpoint(client, plan_png):
     assert len(body["doors"]) == 2
     assert client.get("/api/v1/jobs/nope/analysis.json").status_code == 404
 
+    rooms = client.get(f"/api/v1/jobs/{job_id}/rooms.json")
+    assert rooms.status_code == 200
+    assert rooms.json()["stage"] == "room_detection"
+    assert client.get(f"/api/v1/jobs/{job_id}/secrets.json").status_code == 404
+
 
 # Keep this test LAST in the file: it deliberately drains the shared
 # per-process token bucket, so any request-making test after it gets 429s.

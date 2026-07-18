@@ -167,3 +167,73 @@ def test_stage1_analysis_is_detection_only(plan_png):
         assert analysis[key]["items"] == []
         assert "pending" in analysis[key]["status"]
     assert analysis["north_arrow"]["detected"] is False
+
+
+def _make_graph(specs, edges):
+    """specs: (id, w_m, h_m); mpp=1 so px == m."""
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.pipeline.types import PlanGraph, Room
+
+    rooms = [
+        Room(id=i, polygon=box(0, j * 100, w, j * 100 + h), area_px=w * h)
+        for j, (i, w, h) in enumerate(specs)
+    ]
+    g = nx.Graph()
+    g.add_nodes_from(r.id for r in rooms)
+    for a, b, opening in edges:
+        g.add_edge(a, b, opening=opening)
+    return PlanGraph(graph=g, rooms=rooms)
+
+
+def test_stage2_classifier_uses_size_and_door_evidence():
+    from app.pipeline.classify import classify_rooms
+
+    pg = _make_graph(
+        [(0, 5.0, 4.0), (1, 3.2, 3.0), (2, 2.2, 2.0), (3, 4.0, 3.5)],
+        [(0, 1, True), (0, 3, True), (3, 2, True)],
+    )
+    classify_rooms(pg, meters_per_px=1.0)
+    labels = {r.id: r.label for r in pg.rooms}
+
+    assert labels[0] == "living_room"          # largest (20 m2)
+    assert labels[1] == "kitchen"              # 9.6 m2, door to living
+    assert labels[2] == "bathroom"             # 4.4 m2, no door to living
+    assert labels[3] == "master_bedroom"       # 14 m2 private room
+    for r in pg.rooms:
+        assert 0 < r.label_confidence <= 1
+        assert r.evidence, f"room {r.id} has no evidence trail"
+
+
+def test_stage2_toilet_off_living_and_store():
+    from app.pipeline.classify import classify_rooms
+
+    pg = _make_graph(
+        [(0, 6.0, 4.0), (1, 2.0, 2.5), (2, 1.4, 1.5)],
+        [(0, 1, True), (0, 2, False)],
+    )
+    classify_rooms(pg, meters_per_px=1.0)
+    labels = {r.id: r.label for r in pg.rooms}
+    assert labels[1] == "common_toilet"        # wet-size, door to living
+    assert labels[2] == "store"                # under 3 m2
+
+
+def test_stage2_rooms_artifact(plan_png):
+    detail = run_pipeline(plan_png).rooms_detail
+
+    assert detail["stage"] == "room_detection"
+    rooms = detail["rooms"]
+    assert len(rooms) == 3
+    names = {r["name"] for r in rooms}
+    assert "living_room" in names
+    for r in rooms:
+        assert len(r["polygon_px"]) >= 4
+        assert len(r["center_px"]) == 2 and len(r["center_m"]) == 2
+        assert r["area_m2"] > 0 and r["perimeter_m"] > 0
+        assert r["windows"]["status"] == "pending_ml_detector"
+        assert isinstance(r["doors"], list) and isinstance(r["adjacent_rooms"], list)
+        assert 0 < r["confidence"] <= 1 and r["evidence"]
+    # Every detected door belongs to exactly two rooms' door lists.
+    door_refs = [d for r in rooms for d in r["doors"]]
+    assert sorted(door_refs) == [0, 0, 1, 1]

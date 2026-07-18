@@ -62,9 +62,9 @@ def _classify(w_m: float, h_m: float, circularity: float, room_label: str) -> tu
     area = w_m * h_m
     if circularity > 0.82:
         return "round_table", 0.6
-    if room_label == "bedroom" and area >= 2.4:
+    if room_label in ("bedroom", "master_bedroom") and area >= 2.4:
         return "bed", 0.55
-    if room_label == "bathroom" and area <= 1.5:
+    if room_label in ("bathroom", "common_toilet") and area <= 1.5:
         return "fixture", 0.5
     if room_label == "living_room" and max(w_m, h_m) / max(0.01, min(w_m, h_m)) >= 2.2:
         return "sofa", 0.45

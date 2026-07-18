@@ -46,6 +46,11 @@ CATALOG: dict[str, list[CatalogItem]] = {
         CatalogItem("wardrobe", 1.8, 0.6, 2.1, (128, 99, 74, 255)),
         CatalogItem("desk", 1.2, 0.6, 0.75, (152, 122, 90, 255)),
     ],
+    "master_bedroom": [
+        CatalogItem("bed", 2.0, 1.8, 0.55, (173, 152, 173, 255)),
+        CatalogItem("wardrobe", 2.4, 0.6, 2.1, (128, 99, 74, 255)),
+        CatalogItem("desk", 1.2, 0.6, 0.75, (152, 122, 90, 255)),
+    ],
     "bathroom": [
         CatalogItem("toilet", 0.7, 0.75, 0.75, (240, 240, 240, 255)),
         CatalogItem("basin", 0.6, 0.45, 0.85, (235, 235, 235, 255)),
