@@ -11,6 +11,7 @@ furniture_mode:
 """
 from __future__ import annotations
 
+from .building_graph import build_semantic_graph
 from .classify import classify_rooms
 from .detect import detect_structure
 from .graph import build_graph
@@ -94,6 +95,9 @@ def run_pipeline(
         }
         for o in openings
     ]
+
+    # Stage 3 artifact — Semantic Building Graph.
+    semantic_graph = build_semantic_graph(plan_graph, openings_out, effective_scale)
 
     # Stage 2 artifact — Room Detector: every room with polygon, center, name,
     # area, doors, windows (pending), adjacency and confidence + evidence.
@@ -230,4 +234,5 @@ def run_pipeline(
         scene_graph=scene_graph,
         analysis=analysis,
         rooms_detail=rooms_detail,
+        building_graph=semantic_graph,
     )

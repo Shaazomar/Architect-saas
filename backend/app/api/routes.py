@@ -46,6 +46,7 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
         # Stage artifacts: each stage's output is its own deliverable.
         (job.dir / "analysis.json").write_text(json.dumps(result.analysis, indent=2))
         (job.dir / "rooms.json").write_text(json.dumps(result.rooms_detail, indent=2))
+        (job.dir / "graph.json").write_text(json.dumps(result.building_graph, indent=2))
         store.update_job(
             job_id,
             "done",
@@ -121,7 +122,7 @@ def _convert_model(glb_path, fmt: str) -> bytes:
 
 # Whitelisted per-stage artifacts. User input never reaches the filesystem:
 # the name must be an exact key here and the job id must exist in the store.
-_STAGE_ARTIFACTS = {"analysis.json", "rooms.json"}
+_STAGE_ARTIFACTS = {"analysis.json", "rooms.json", "graph.json"}
 
 
 @router.get("/jobs/{job_id}/{artifact}.json")

@@ -95,6 +95,11 @@ def test_analysis_artifact_endpoint(client, plan_png):
     rooms = client.get(f"/api/v1/jobs/{job_id}/rooms.json")
     assert rooms.status_code == 200
     assert rooms.json()["stage"] == "room_detection"
+
+    graph = client.get(f"/api/v1/jobs/{job_id}/graph.json")
+    assert graph.status_code == 200
+    assert graph.json()["stage"] == "building_graph"
+
     assert client.get(f"/api/v1/jobs/{job_id}/secrets.json").status_code == 404
 
 

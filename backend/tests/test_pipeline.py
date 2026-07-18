@@ -237,3 +237,32 @@ def test_stage2_rooms_artifact(plan_png):
     # Every detected door belongs to exactly two rooms' door lists.
     door_refs = [d for r in rooms for d in r["doors"]]
     assert sorted(door_refs) == [0, 0, 1, 1]
+
+
+def test_stage3_building_graph(plan_png):
+    bg = run_pipeline(plan_png).building_graph
+
+    assert bg["stage"] == "building_graph"
+    assert len(bg["nodes"]) == 3
+
+    zones_by_room = {n["id"]: n["zone"] for n in bg["nodes"]}
+    assert zones_by_room[0] == "public"        # living_room
+    assert zones_by_room[1] == "private"       # master_bedroom
+    assert zones_by_room[2] == "service"       # bathroom
+
+    # Door edges must reference detected openings; the third adjacency
+    # (living-bathroom share a wall but no detected opening) stays adjacency.
+    door_edges = [e for e in bg["edges"] if e["type"] == "door"]
+    adj_edges = [e for e in bg["edges"] if e["type"] == "adjacency"]
+    assert len(door_edges) == 2
+    assert all(e["opening_id"] is not None and e["width_m"] > 0 for e in door_edges)
+    assert all(e["opening_id"] is None for e in adj_edges)
+
+    acc = bg["accessibility"]
+    assert acc["entrance_room"] == 0           # assumed public room (living)
+    assert acc["entrance_source"] == "assumed_public_room"
+    assert acc["all_rooms_reachable"] is True
+    assert acc["door_depth_from_entrance"]["0"] == 0
+    assert bg["windows"]["status"] == "pending_ml_detector"
+    assert set(bg["zones"]) == {"public", "private", "service"}
+    assert bg["hierarchy"]["building"]["floors"][0]["zones"]["public"] == [0]

@@ -84,3 +84,5 @@ class PipelineResult:
     analysis: dict[str, Any] = field(default_factory=dict)
     # Stage 2 (Room Detector) artifact: per-room semantics.
     rooms_detail: dict[str, Any] = field(default_factory=dict)
+    # Stage 3 (Building Graph) artifact: semantic graph with zones/access.
+    building_graph: dict[str, Any] = field(default_factory=dict)
