@@ -80,6 +80,21 @@ def test_multi_format_export(client, plan_png):
     assert client.get(f"/api/v1/jobs/{job_id}/model.%2e%2e").status_code == 404
 
 
+def test_analysis_artifact_endpoint(client, plan_png):
+    job_id = client.post(
+        "/api/v1/plans", files={"file": ("plan.png", plan_png, "image/png")}
+    ).json()["job_id"]
+
+    resp = client.get(f"/api/v1/jobs/{job_id}/analysis.json")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["stage"] == "floor_plan_analysis"
+    assert len(body["doors"]) == 2
+    assert client.get("/api/v1/jobs/nope/analysis.json").status_code == 404
+
+
+# Keep this test LAST in the file: it deliberately drains the shared
+# per-process token bucket, so any request-making test after it gets 429s.
 def test_rate_limit_kicks_in(client):
     # Bucket capacity is settings.rate_limit_per_minute (60); drain it.
     codes = [client.get("/api/v1/jobs/x").status_code for _ in range(70)]

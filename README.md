@@ -34,6 +34,7 @@ with `python -m app.devtools.sample_plan`.
 |---|---|---|
 | POST | `/api/v1/plans` | Upload a PNG/JPEG plan (multipart `file`; optional `?meters_per_px=`, `?furniture=detected\|generated\|none`). Returns `202 {job_id}`. |
 | GET | `/api/v1/jobs/{id}` | Job status, rooms (with label confidence), adjacency graph, detected openings, scene graph, validation + warnings, furniture report, room schedule, material take-off, cost estimate. |
+| GET | `/api/v1/jobs/{id}/analysis.json` | Stage 1 artifact: detection-only analysis (walls, rooms, doors, symbols, scale) — no geometry, undetected classes marked pending, never guessed. |
 | GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `obj`, `stl`, or `ply`. |
 | GET | `/health` | Liveness probe (public, unauthenticated). |
 

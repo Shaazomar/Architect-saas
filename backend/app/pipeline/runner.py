@@ -93,6 +93,57 @@ def run_pipeline(
         for o in openings
     ]
 
+    # Stage 1 artifact — Floor Plan Analyzer: detection only, no geometry.
+    # Element classes we cannot detect yet are empty lists, never guesses;
+    # each carries a status naming the stage that will fill it.
+    analysis = {
+        "stage": "floor_plan_analysis",
+        "detector": "classical_cv",
+        "image_px": {"width": plan.width, "height": plan.height},
+        "scale": {
+            "meters_per_px": round(effective_scale, 6),
+            "source": scale_source,
+            "confidence": 0.9 if scale_source == "explicit" else 0.5,
+        },
+        "walls": [
+            {
+                "id": i,
+                "polygon_px": [[round(x, 1), round(y, 1)] for x, y in g.exterior.coords],
+                "hole_count": len(g.interiors),
+            }
+            for i, g in enumerate(vector.walls.geoms)
+        ],
+        "wall_thickness_px": round(vector.wall_thickness_px, 1),
+        "rooms": [
+            {
+                "id": r.id,
+                "label": r.label,
+                "label_source": "heuristic",
+                "polygon_px": [[round(x, 1), round(y, 1)] for x, y in r.polygon.exterior.coords],
+            }
+            for r in vector.rooms
+        ],
+        "doors": openings_out,
+        "windows": {"items": [], "status": "pending_ml_detector"},
+        "stairs": {"items": [], "status": "pending_ml_detector"},
+        "columns": {"items": [], "status": "pending_ml_detector"},
+        "dimensions": {"items": [], "status": "pending_ocr"},
+        "text": {"items": [], "status": "pending_ocr"},
+        "north_arrow": {"detected": False, "status": "pending_ml_detector"},
+        "symbols": [
+            {
+                "id": s.id,
+                "category": s.category,
+                "confidence": s.confidence,
+                "room_id": s.room_id,
+                "bbox_px": [round(v, 1) for v in s.footprint_px.bounds],
+                "size_m": list(s.size_m),
+                "rotation_deg": s.rotation_deg,
+            }
+            for s in detected
+        ],
+    }
+
     scene_graph = {
         "building": {
             "rooms": [
@@ -146,4 +197,5 @@ def run_pipeline(
         reports=build_reports(plan_graph, recon),
         openings=openings_out,
         scene_graph=scene_graph,
+        analysis=analysis,
     )

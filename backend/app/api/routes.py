@@ -6,6 +6,7 @@ GET  /api/v1/jobs/{id}/model.glb   the reconstructed 3D model
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
@@ -42,6 +43,8 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
         job = store.get_job(job_id)
         assert job is not None
         (job.dir / "model.glb").write_bytes(result.glb)
+        # Stage 1 artifact: detection-only analysis, its own deliverable.
+        (job.dir / "analysis.json").write_text(json.dumps(result.analysis, indent=2))
         store.update_job(
             job_id,
             "done",
@@ -113,6 +116,17 @@ def _convert_model(glb_path, fmt: str) -> bytes:
     combined = trimesh.util.concatenate(scene.dump())
     data = combined.export(file_type=fmt)
     return data.encode() if isinstance(data, str) else data
+
+
+@router.get("/jobs/{job_id}/analysis.json")
+def job_analysis(job_id: str):
+    job = store.get_job(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(404, "Analysis not available.")
+    path = job.dir / "analysis.json"
+    if not path.is_file():
+        raise HTTPException(404, "Analysis not available.")
+    return FileResponse(path, media_type="application/json", filename="analysis.json")
 
 
 @router.get("/jobs/{job_id}/model.{fmt}")

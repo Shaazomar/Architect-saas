@@ -78,3 +78,5 @@ class PipelineResult:
     reports: dict[str, Any] = field(default_factory=dict)
     openings: list[dict[str, Any]] = field(default_factory=list)
     scene_graph: dict[str, Any] = field(default_factory=dict)
+    # Stage 1 (Floor Plan Analyzer) artifact: pure detection, no geometry.
+    analysis: dict[str, Any] = field(default_factory=dict)

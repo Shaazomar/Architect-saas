@@ -149,3 +149,21 @@ def test_reports_and_furniture_in_pipeline_result(plan_png):
     furn_nodes = [n for n in scene.geometry if n.startswith("furniture_")]
     assert len(furn_nodes) == len(result.furniture)
     assert any(n.startswith("roof_") for n in scene.geometry)
+
+
+def test_stage1_analysis_is_detection_only(plan_png):
+    analysis = run_pipeline(plan_png).analysis
+
+    assert analysis["stage"] == "floor_plan_analysis"
+    assert analysis["scale"]["source"] == "wall_thickness_assumption"
+    assert len(analysis["walls"]) >= 1
+    assert all(len(w["polygon_px"]) >= 4 for w in analysis["walls"])
+    assert len(analysis["rooms"]) == 3
+    assert len(analysis["doors"]) == 2
+    assert len(analysis["symbols"]) == 2
+
+    # Never guess: undetectable classes are explicitly empty + pending.
+    for key in ("windows", "stairs", "columns", "dimensions", "text"):
+        assert analysis[key]["items"] == []
+        assert "pending" in analysis[key]["status"]
+    assert analysis["north_arrow"]["detected"] is False
