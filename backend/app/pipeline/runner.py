@@ -25,13 +25,13 @@ from .types import PipelineResult
 from .validate import validate
 from .vectorize import vectorize
 
-FURNITURE_MODES = ("detected", "generated", "none")
+FURNITURE_MODES = ("auto", "detected", "generated", "none")
 
 
 def run_pipeline(
     image_bytes: bytes,
     meters_per_px: float | None = None,
-    furniture_mode: str = "detected",
+    furniture_mode: str = "auto",
     ocr: OcrEngine | None = None,
 ) -> PipelineResult:
     if furniture_mode not in FURNITURE_MODES:
@@ -64,6 +64,7 @@ def run_pipeline(
         meters_per_px=scale,
         furniture_mode=furniture_mode,
         detected_objects=detected,
+        openings=openings,
     )
     validation = validate(recon, plan_graph)
 
@@ -222,6 +223,30 @@ def run_pipeline(
         }
     )
 
+    # Stage 5 artifact — furnishing scene.
+    furnishing = {
+        "stage": "furnishing",
+        "mode": furniture_mode,
+        "rules": {
+            "circulation_clearance_m": 0.45,
+            "door_clearance": "no generated furniture within door half-width + 0.6 m",
+            "policy": "detected symbols keep exact drawn position; unplaceable items are skipped",
+        },
+        "rooms": [
+            {
+                "id": r.id,
+                "label": r.label,
+                "items": [f for f in recon.furniture if f["room_id"] == r.id],
+            }
+            for r in plan_graph.rooms
+        ],
+        "totals": {
+            "items": len(recon.furniture),
+            "detected": sum(1 for f in recon.furniture if f["source"] == "detected"),
+            "generated": sum(1 for f in recon.furniture if f["source"] == "generated"),
+        },
+    }
+
     return PipelineResult(
         glb=recon.scene_glb,
         rooms=rooms,
@@ -235,4 +260,6 @@ def run_pipeline(
         analysis=analysis,
         rooms_detail=rooms_detail,
         building_graph=semantic_graph,
+        geometry=recon.geometry_manifest,
+        furnishing=furnishing,
     )

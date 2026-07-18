@@ -47,6 +47,8 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
         (job.dir / "analysis.json").write_text(json.dumps(result.analysis, indent=2))
         (job.dir / "rooms.json").write_text(json.dumps(result.rooms_detail, indent=2))
         (job.dir / "graph.json").write_text(json.dumps(result.building_graph, indent=2))
+        (job.dir / "geometry.json").write_text(json.dumps(result.geometry, indent=2))
+        (job.dir / "scene.json").write_text(json.dumps(result.furnishing, indent=2))
         store.update_job(
             job_id,
             "done",
@@ -74,7 +76,7 @@ async def upload_plan(
     file: UploadFile,
     background: BackgroundTasks,
     meters_per_px: float | None = Query(default=None, gt=0, le=1.0),
-    furniture: Literal["detected", "generated", "none"] = Query(default="detected"),
+    furniture: Literal["auto", "detected", "generated", "none"] = Query(default="auto"),
 ):
     # Read one byte past the cap so we can distinguish "at limit" from "over".
     data = await file.read(settings.max_upload_bytes + 1)
@@ -122,7 +124,7 @@ def _convert_model(glb_path, fmt: str) -> bytes:
 
 # Whitelisted per-stage artifacts. User input never reaches the filesystem:
 # the name must be an exact key here and the job id must exist in the store.
-_STAGE_ARTIFACTS = {"analysis.json", "rooms.json", "graph.json"}
+_STAGE_ARTIFACTS = {"analysis.json", "rooms.json", "graph.json", "geometry.json", "scene.json"}
 
 
 @router.get("/jobs/{job_id}/{artifact}.json")

@@ -37,6 +37,8 @@ with `python -m app.devtools.sample_plan`.
 | GET | `/api/v1/jobs/{id}/analysis.json` | Stage 1 artifact: detection-only analysis (walls, rooms, doors, symbols, scale) — no geometry, undetected classes marked pending, never guessed. |
 | GET | `/api/v1/jobs/{id}/rooms.json` | Stage 2 artifact: per-room polygon, center, name, area, doors, windows (pending), adjacency, confidence + evidence trail. |
 | GET | `/api/v1/jobs/{id}/graph.json` | Stage 3 artifact: semantic building graph — rooms as nodes, doors as typed edges, zones (public/private/service/circulation), hierarchy, accessibility from entrance. |
+| GET | `/api/v1/jobs/{id}/geometry.json` | Stage 4 artifact: generated element counts (walls, slab, roof, parapet, lintels, door frames, skirting), standards used, pending classes (windows/stairs). |
+| GET | `/api/v1/jobs/{id}/scene.json` | Stage 5 artifact: furnishing scene per room — items with source (detected/generated), placement rules (circulation + door clearance). |
 | GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `obj`, `stl`, or `ply`. |
 | GET | `/health` | Liveness probe (public, unauthenticated). |
 
@@ -60,9 +62,13 @@ backend/app/pipeline/        one module per stage, typed contracts between them
   openings.py     doors/passages from wall gaps: width, connected rooms
   symbols.py      furniture symbols from the drawing, reconstructed at their
                   exact drawn footprint — fidelity mode, the default
-  furniture.py    opt-in catalog placement (furniture=generated) with wall
-                  alignment, collision detection, circulation clearance
-  reconstruct.py  2D → 3D (Trimesh): walls, slab, roof, furniture; px → m scaling
+  furniture.py    catalog placement: wall alignment, collision detection,
+                  per-item clearance, door-clearance zones, stacked pieces
+                  (mattress/blanket), elevated pieces (upper cabinets, mirrors).
+                  furniture=auto (default): drawn symbols keep their exact
+                  position; symbol-less rooms are furnished — no empty rooms
+  reconstruct.py  2D → 3D (Trimesh): walls, slab, roof + parapet, door
+                  lintels/frames at detected openings, skirting, furniture
   reports.py      room schedule, material take-off, indicative cost estimate
   validate.py     mesh integrity, scale plausibility, room reachability
   runner.py       orchestrator — pure function, Celery-ready

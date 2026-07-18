@@ -67,6 +67,8 @@ class ReconstructionResult:
     meters_per_px: float
     stats: dict[str, Any] = field(default_factory=dict)
     furniture: list[dict[str, Any]] = field(default_factory=list)
+    # Stage 4 artifact: what geometry was generated, to which standards.
+    geometry_manifest: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -86,3 +88,7 @@ class PipelineResult:
     rooms_detail: dict[str, Any] = field(default_factory=dict)
     # Stage 3 (Building Graph) artifact: semantic graph with zones/access.
     building_graph: dict[str, Any] = field(default_factory=dict)
+    # Stage 4 (Geometry Engine) artifact: generated elements + standards.
+    geometry: dict[str, Any] = field(default_factory=dict)
+    # Stage 5 (Furniture AI) artifact: furnishing scene per room.
+    furnishing: dict[str, Any] = field(default_factory=dict)

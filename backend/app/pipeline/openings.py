@@ -34,6 +34,11 @@ class Opening:
     center_px: tuple[float, float]
     rooms: list[int | str]        # two room ids, or [room_id, "exterior"]
     confidence: float
+    # Oriented gap rectangle for geometry construction (Stage 4):
+    # angle of the width axis in image coords, and the gap depth (wall run).
+    angle_deg: float = 0.0
+    depth_px: float = 0.0
+    width_px: float = 0.0
 
 
 def _room_label_image(plan: PreprocessedPlan, vector: VectorPlan) -> np.ndarray:
@@ -75,8 +80,10 @@ def detect_openings(
         # The bridge blob spans the wall gap: its longer minAreaRect side is
         # the clear width of the opening.
         contour = cv2.findContours(comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0][0]
-        (_, _), (w, h), _ = cv2.minAreaRect(contour)
+        (_, _), (w, h), rect_angle = cv2.minAreaRect(contour)
         width_m = max(w, h) * meters_per_px
+        # Angle of the *width* axis (the longer rect side) in image coords.
+        angle_deg = rect_angle if w >= h else rect_angle + 90.0
         if not (_MIN_WIDTH_M <= width_m <= _MAX_WIDTH_M):
             continue
 
@@ -92,6 +99,9 @@ def detect_openings(
                 center_px=(round(float(centroids[comp][0]), 1), round(float(centroids[comp][1]), 1)),
                 rooms=parties,
                 confidence=0.7,  # geometric evidence only; no leaf/swing symbol read yet
+                angle_deg=round(float(angle_deg), 1),
+                depth_px=round(float(min(w, h)), 1),
+                width_px=round(float(max(w, h)), 1),
             )
         )
     return openings

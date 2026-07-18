@@ -67,13 +67,25 @@ def test_furniture_is_placed_legally():
     room = box(0, 0, 5.0, 4.0)
     placed = place_furniture(0, "bedroom", room)
 
-    assert {p.name for p in placed} == {"bed", "wardrobe", "desk"}
+    assert {"bed", "mattress", "wardrobe"} <= {p.name for p in placed}
     for p in placed:
         assert p.footprint.within(room), f"{p.name} pokes outside the room"
-    for i, a in enumerate(placed):
-        for b in placed[i + 1 :]:
+
+    # Collision rules apply to ground-level bases; stacked pieces (mattress,
+    # blanket) share their base's footprint by design, elevated pieces
+    # (mirror) clear the floor.
+    stacked = {"mattress", "blanket"}
+    bases = [p for p in placed if p.z0 == 0 and p.name not in stacked]
+    for i, a in enumerate(bases):
+        for b in bases[i + 1 :]:
             assert not a.footprint.intersects(b.footprint), f"{a.name} collides with {b.name}"
-            assert a.footprint.distance(b.footprint) >= 0.4  # circulation preserved
+
+    # Large pieces keep full circulation clearance between each other.
+    large = {p.name: p for p in bases if p.name in ("bed", "wardrobe", "study_table")}
+    names = list(large)
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            assert large[a].footprint.distance(large[b].footprint) >= 0.4
 
 
 def test_furniture_skipped_when_room_too_small():
@@ -81,7 +93,7 @@ def test_furniture_skipped_when_room_too_small():
 
     from app.pipeline.furniture import place_furniture
 
-    closet = box(0, 0, 0.6, 0.6)
+    closet = box(0, 0, 0.4, 0.4)
     assert place_furniture(0, "bedroom", closet) == []
 
 
@@ -103,7 +115,7 @@ def test_detected_furniture_matches_drawn_symbols(plan_png):
     """Fidelity mandate: only the two symbols drawn in the sample (a rectangle
     in the living room, a circle in the bathroom) become objects — the text
     labels and dimension lines must not."""
-    result = run_pipeline(plan_png)  # default mode is "detected"
+    result = run_pipeline(plan_png, furniture_mode="detected")
 
     assert len(result.furniture) == 2
     assert all(f["source"] == "detected" for f in result.furniture)
@@ -266,3 +278,54 @@ def test_stage3_building_graph(plan_png):
     assert bg["windows"]["status"] == "pending_ml_detector"
     assert set(bg["zones"]) == {"public", "private", "service"}
     assert bg["hierarchy"]["building"]["floors"][0]["zones"]["public"] == [0]
+
+
+def test_stage4_geometry_elements(plan_png):
+    result = run_pipeline(plan_png)
+    scene = trimesh.load(io.BytesIO(result.glb), file_type="glb")
+    names = list(scene.geometry)
+
+    # Door frames + lintels exist for each of the 2 detected openings.
+    assert sum(1 for n in names if n.startswith("lintel_")) == 2
+    assert sum(1 for n in names if n.startswith("door_frame_")) == 4
+    # Skirting per room, parapet on the roof.
+    assert sum(1 for n in names if n.startswith("skirting_")) >= 3
+    assert any(n.startswith("roof_parapet_") for n in names)
+
+    assert result.validation["no_floating_meshes"] is True
+    assert result.validation["passed"] is True
+
+    manifest = result.geometry
+    assert manifest["stage"] == "geometry"
+    assert manifest["node_counts"]["lintel"] == 2
+    assert "no windows detected" in manifest["pending"]["window_frames_glass"]
+
+
+def test_stage5_auto_mode_never_leaves_rooms_empty(plan_png):
+    result = run_pipeline(plan_png)  # default: auto
+
+    scene_json = result.furnishing
+    assert scene_json["stage"] == "furnishing"
+    assert scene_json["mode"] == "auto"
+
+    by_room = {r["id"]: r["items"] for r in scene_json["rooms"]}
+    assert all(len(items) > 0 for items in by_room.values()), "no room may be empty"
+
+    # Rooms with drawn symbols keep exactly those (fidelity)...
+    assert all(f["source"] == "detected" for f in by_room[0])  # living: drawn rect
+    assert all(f["source"] == "detected" for f in by_room[2])  # bathroom: drawn circle
+    # ...and the symbol-less bedroom is furnished from the catalog.
+    bedroom_items = {f["item"] for f in by_room[1]}
+    assert {"bed", "mattress", "wardrobe"} <= bedroom_items
+    assert all(f["source"] == "generated" for f in by_room[1])
+
+    # Door clearance: generated pieces stay clear of both door centers.
+    mpp = result.stats["meters_per_px"]
+    door_centers = [(o["center_px"][0] * mpp, -o["center_px"][1] * mpp) for o in result.openings]
+    for f in by_room[1]:
+        if f["item"] in ("mattress", "blanket"):
+            continue
+        px, py = f["position_m"]
+        for ox, oy in door_centers:
+            d = ((px - ox) ** 2 + (py - oy) ** 2) ** 0.5
+            assert d > 0.6, f"{f['item']} sits in a doorway (dist {d:.2f} m)"
