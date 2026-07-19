@@ -141,14 +141,27 @@ def job_status(job_id: str):
 # value ever reaches the filesystem or an exporter.
 _EXPORT_FORMATS = {
     "glb": "model/gltf-binary",
+    "gltf": "model/gltf+json",
     "obj": "model/obj",
     "stl": "model/stl",
     "ply": "application/octet-stream",
+    "ifc": "application/x-step",
+    "usdz": "model/vnd.usdz+zip",
 }
 
 
 def _convert_model(glb_path, fmt: str) -> bytes:
     import trimesh
+
+    from ..pipeline import exports
+
+    if fmt in ("gltf", "ifc", "usdz"):
+        glb = glb_path.read_bytes()
+        if fmt == "gltf":
+            return exports.glb_to_gltf_embedded(glb)
+        if fmt == "ifc":
+            return exports.export_ifc(glb)
+        return exports.export_usdz(glb)
 
     scene = trimesh.load(glb_path, file_type="glb")
     if fmt == "obj":
@@ -167,6 +180,89 @@ _STAGE_ARTIFACTS = {
     "scene.json", "materials.json", "lighting.json", "cameras.json", "renders.json",
 }
 _RENDER_NAME = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+# Friendly deliverable names for the export bundle (Stage 12 spec).
+_FRIENDLY_VIEWS = {
+    "top_orthographic": "top_view",
+    "isometric_45": "isometric",
+    "bird_eye": "bird_eye",
+    "front_elevation": "front",
+    "rear_elevation": "rear",
+}
+
+
+def _friendly_view_name(stem: str) -> str:
+    if stem in _FRIENDLY_VIEWS:
+        return _FRIENDLY_VIEWS[stem]
+    if stem.startswith("interior_"):  # interior_{room_id}_{label}
+        return stem.split("_", 2)[2]
+    return stem
+
+
+@router.get("/jobs/{job_id}/renders/walkthrough.mp4")
+def job_walkthrough(job_id: str):
+    job = store.get_job(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(404, "Walkthrough not available.")
+    path = job.dir / "renders" / "walkthrough.mp4"
+    if not path.is_file():
+        raise HTTPException(404, "Walkthrough not available.")
+    return FileResponse(path, media_type="video/mp4", filename="walkthrough.mp4")
+
+
+@router.get("/jobs/{job_id}/export.zip")
+def job_export_bundle(job_id: str):
+    """Stage 12: one bundle with every deliverable — models in all formats,
+    renders under friendly names, the walkthrough, metadata and all stage
+    artifacts. Built once, then cached."""
+    import zipfile
+
+    job = store.get_job(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(404, "Export not available.")
+    bundle = job.dir / "export.zip"
+    if not bundle.is_file():
+        glb_path = job.dir / "model.glb"
+        if not glb_path.is_file():
+            raise HTTPException(404, "Export not available.")
+        skipped: dict[str, str] = {}
+        with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
+            for fmt in _EXPORT_FORMATS:
+                path = job.dir / f"model.{fmt}"
+                try:
+                    if fmt != "glb" and not path.is_file():
+                        path.write_bytes(_convert_model(glb_path, fmt))
+                    z.write(path, f"house.{fmt}")
+                except Exception as exc:
+                    log.warning("export %s failed for job %s: %s", fmt, job.id, exc)
+                    skipped[fmt] = f"{type(exc).__name__}: {exc}"
+            renders_dir = job.dir / "renders"
+            if renders_dir.is_dir():
+                for png in sorted(renders_dir.glob("*.png")):
+                    z.write(png, f"renders/{_friendly_view_name(png.stem)}.png")
+                mp4 = renders_dir / "walkthrough.mp4"
+                if mp4.is_file():
+                    z.write(mp4, "renders/walkthrough.mp4")
+            for artifact in sorted(_STAGE_ARTIFACTS):
+                path = job.dir / artifact
+                if path.is_file():
+                    z.write(path, f"artifacts/{artifact}")
+            metadata = dict(job.result or {})
+            metadata.update(
+                {
+                    "job_id": job.id,
+                    "formats_skipped": skipped or None,
+                    "formats_pending": {"fbx": "proprietary Autodesk SDK format; use the IFC or glTF"},
+                    "optimization": {
+                        "vertex_welding": "applied to IFC/USDZ exports",
+                        "draco_meshopt_compression": "pending",
+                        "textures": "factor-based PBR (no texture maps yet); nothing to embed",
+                    },
+                }
+            )
+            z.writestr("metadata.json", json.dumps(metadata, indent=2))
+    return FileResponse(bundle, media_type="application/zip", filename="export.zip")
 
 
 @router.get("/jobs/{job_id}/renders/{name}.png")

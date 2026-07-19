@@ -46,7 +46,9 @@ with `python -m app.devtools.sample_plan`.
 | GET | `/api/v1/jobs/{id}/cameras.json` | Stage 9 artifact: presentation cameras (also embedded in the GLB as glTF cameras) + door-depth-ordered walkthrough waypoints. |
 | GET | `/api/v1/jobs/{id}/renders.json` | Stage 10 artifact: rendered view manifest (pyrender rasterization at 4K by default; `ARCH_RENDER_WIDTH`/`HEIGHT` for 8K). |
 | GET | `/api/v1/jobs/{id}/renders/{name}.png` | A rendered view: top plan, isometric, bird's eye, elevations, per-room interiors. |
-| GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `obj`, `stl`, or `ply`. |
+| GET | `/api/v1/jobs/{id}/renders/walkthrough.mp4` | Stage 12: H.264 interior walkthrough along the door-depth path. |
+| GET | `/api/v1/jobs/{id}/export.zip` | Stage 12: the full deliverable bundle — house.{glb,gltf,obj,stl,ply,ifc,usdz}, renders under friendly names, walkthrough.mp4, metadata.json, all stage artifacts. FBX is declared pending (proprietary SDK), never faked. |
+| GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `gltf` (embedded, keeps lights/cameras), `obj`, `stl`, `ply`, `ifc` (IFC4 via IfcOpenShell: spatial tree, IfcWall/IfcSlab/IfcSpace/IfcFurnishingElement), or `usdz` (UsdPreviewSurface materials). |
 | GET | `/health` | Liveness probe (public, unauthenticated). |
 
 Geometry follows architectural standards: 230 mm exterior walls (scale
@@ -132,10 +134,13 @@ storage (MinIO/R2) for artifacts, and Postgres instead of the SQLite job store
 | Roof/ceiling generation (toggleable) | ✅ working | `reconstruct.py` |
 | Multi-format export (GLB/OBJ/STL/PLY) | ✅ working | `api/routes.py` |
 | Room schedule, material take-off, cost estimate | ✅ working | `reports.py` |
+| IFC4 export (BIM-interoperable) | ✅ working | `exports.py` (IfcOpenShell) |
+| USDZ + embedded glTF export | ✅ working | `exports.py` (usd-core) |
+| Walkthrough MP4 + export bundle | ✅ working | `renders.py`, `api/routes.py` |
 | Doors/windows/stairs detectors (YOLO/SAM2) | ⬜ | `detect.py` contract |
 | OCR: room names, dimensions, scale | ⬜ | `ocr.py` contract |
 | GNN room classifier | ⬜ | `classify.py` contract |
-| IFC / USD / FBX / STEP export | ⬜ | `reconstruct.py` (IfcOpenShell/OpenCascade) |
-| PBR materials, style presets, lighting | ⬜ | new stage after `reconstruct` |
-| Photorealistic renders + walkthrough video | ⬜ | headless Blender stage |
+| FBX export | ⬜ | needs Blender/FBX SDK (proprietary format) |
+| Texture maps (UV/normal/AO), style presets | ⬜ | `materials.py` contract |
+| Photorealistic path tracing (Cycles) | ⬜ | headless Blender stage |
 | Celery + RabbitMQ workers | ⬜ | `runner.py` is already a pure function |

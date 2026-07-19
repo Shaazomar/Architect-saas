@@ -480,3 +480,40 @@ def test_stage11_auto_repair_removes_illegal_generated_piece(plan_png):
     assert repaired is not None
     rescene = tm.load(io.BytesIO(repaired), file_type="glb")
     assert "furniture_0_ghost_0" not in rescene.geometry
+
+
+def test_stage12_export_formats(plan_png):
+    import ifcopenshell
+    import json as _json
+    import tempfile
+    from pathlib import Path
+
+    from app.pipeline import exports
+
+    glb = run_pipeline(plan_png).glb
+
+    # Embedded glTF preserves lights and cameras from the GLB byte-for-byte.
+    gltf = exports.glb_to_gltf_embedded(glb)
+    doc = _json.loads(gltf)
+    assert doc["buffers"][0]["uri"].startswith("data:application/octet-stream;base64,")
+    assert "KHR_lights_punctual" in doc["extensionsUsed"]
+    assert len(doc["cameras"]) >= 8
+
+    # IFC round-trips through ifcopenshell with the right classes.
+    ifc = exports.export_ifc(glb)
+    assert ifc.startswith(b"ISO-10303-21")
+    with tempfile.NamedTemporaryFile(suffix=".ifc", delete=False) as tmp:
+        tmp.write(ifc)
+        name = tmp.name
+    f = ifcopenshell.open(name)
+    Path(name).unlink()
+    assert len(f.by_type("IfcWall")) >= 2
+    assert len(f.by_type("IfcSpace")) == 3
+    assert len(f.by_type("IfcSlab")) >= 2
+    assert len(f.by_type("IfcFurnishingElement")) > 0
+    assert len(f.by_type("IfcBuildingStorey")) == 1
+
+    # USDZ is a valid zip package.
+    usdz = exports.export_usdz(glb)
+    assert usdz[:2] == b"PK"
+    assert len(usdz) > 5000

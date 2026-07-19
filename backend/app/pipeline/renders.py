@@ -114,20 +114,88 @@ def render_all(glb_path: str, cameras_path: str, out_dir: str, width: int, heigh
         )
     renderer.delete()
 
+    walkthrough_entry = _render_walkthrough(
+        pyrender, trimesh, tm_scene, lights, cameras_doc.get("walkthrough", {}), out,
+        min(width, 1280), min(height, 720),
+    )
+
     manifest = {
         "stage": "renders",
         "status": "ok",
         "renderer": "pyrender (GPU rasterization, PBR materials, embedded lights)",
         "resolution": [width, height],
         "views": views,
+        "walkthrough": walkthrough_entry
+        or {"status": "skipped", "reason": "fewer than two walkthrough waypoints"},
         "pending": {
             "photorealistic_pathtracing": "Blender/Cycles integration pending — "
             "rasterized output is not passed off as photoreal",
-            "walkthrough_video": "waypoints ready in cameras.json; MP4 encoding pending",
         },
     }
     (out / ".." / "renders.json").resolve().write_text(json.dumps(manifest, indent=2))
     return manifest
+
+
+def _render_walkthrough(pyrender, trimesh, tm_scene, lights, walkthrough: dict,
+                        out: Path, width: int, height: int) -> dict | None:
+    """Render the door-depth-ordered waypoint path to an H.264 MP4."""
+    waypoints = walkthrough.get("waypoints", [])
+    if len(waypoints) < 2:
+        return None
+    import imageio.v2 as iio
+
+    from .cameras import _look_at_quat_xyzw
+
+    # Interior scene (roof hidden), built once; the camera pose animates.
+    scene = pyrender.Scene(ambient_light=[0.34, 0.34, 0.36], bg_color=[0.96, 0.96, 0.97])
+    for name, geom in tm_scene.geometry.items():
+        if name.startswith(("roof_", "roof_parapet")) or not isinstance(geom, trimesh.Trimesh):
+            continue
+        scene.add(pyrender.Mesh.from_trimesh(geom, smooth=False), name=name)
+    for light in lights:
+        pose = _quat_to_mat(light["rotation"], light["translation"])
+        if light["type"] == "directional":
+            scene.add(pyrender.DirectionalLight(color=light["color"], intensity=3.0), pose=pose)
+        else:
+            scene.add(pyrender.PointLight(color=light["color"],
+                                          intensity=light["intensity"] * 1.5), pose=pose)
+    cam_node = scene.add(pyrender.PerspectiveCamera(yfov=1.1, znear=0.05), pose=np.eye(4))
+
+    pts = np.array([w["position"] for w in waypoints], dtype=float)
+    fps, frames_per_seg = 24, 40
+    # Sampled positions with smoothstep easing per segment.
+    samples = []
+    for i in range(len(pts) - 1):
+        for k in range(frames_per_seg):
+            t = k / frames_per_seg
+            t = t * t * (3 - 2 * t)
+            samples.append(pts[i] * (1 - t) + pts[i + 1] * t)
+    samples.append(pts[-1])
+    samples = np.array(samples)
+
+    renderer = pyrender.OffscreenRenderer(width, height)
+    path = out / "walkthrough.mp4"
+    writer = iio.get_writer(str(path), fps=fps, codec="libx264", quality=8,
+                            macro_block_size=1)
+    lookahead = 6
+    for i, pos in enumerate(samples):
+        target = samples[min(i + lookahead, len(samples) - 1)].copy()
+        if np.linalg.norm(target - pos) < 0.2:
+            target = pos + np.array([0.0, 0.0, 1.0])
+        target[1] = 1.35
+        q = _look_at_quat_xyzw(pos, target)
+        scene.set_pose(cam_node, _quat_to_mat(q, pos))
+        color, _ = renderer.render(scene)
+        writer.append_data(color)
+    writer.close()
+    renderer.delete()
+    return {
+        "file": path.name,
+        "fps": fps,
+        "frames": len(samples),
+        "resolution": [width, height],
+        "route": [w["label"] for w in waypoints],
+    }
 
 
 def main() -> int:

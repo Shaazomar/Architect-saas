@@ -128,6 +128,34 @@ def test_stage10_renders_through_api(client, plan_png, monkeypatch):
     manifest = client.get(f"/api/v1/jobs/{job_id}/renders.json")
     assert manifest.status_code == 200 and manifest.json()["status"] == "ok"
 
+    # Stage 12: the walkthrough MP4 was rendered and is served.
+    assert manifest.json()["walkthrough"]["file"] == "walkthrough.mp4"
+    mp4 = client.get(f"/api/v1/jobs/{job_id}/renders/walkthrough.mp4")
+    assert mp4.status_code == 200
+    assert mp4.content[4:8] == b"ftyp"  # MP4 container magic
+    assert len(mp4.content) > 10_000
+
+    # Stage 12: the export bundle carries every deliverable.
+    import io as _io
+    import zipfile as _zipfile
+
+    resp = client.get(f"/api/v1/jobs/{job_id}/export.zip")
+    assert resp.status_code == 200
+    names = set(_zipfile.ZipFile(_io.BytesIO(resp.content)).namelist())
+    for expected in (
+        "house.glb", "house.gltf", "house.obj", "house.ifc", "house.usdz",
+        "renders/top_view.png", "renders/isometric.png", "renders/front.png",
+        "renders/rear.png", "renders/walkthrough.mp4", "metadata.json",
+        "artifacts/analysis.json", "artifacts/rooms.json",
+    ):
+        assert expected in names, expected
+    meta = _zipfile.ZipFile(_io.BytesIO(resp.content)).read("metadata.json")
+    import json as _json
+
+    metadata = _json.loads(meta)
+    assert metadata["formats_pending"]["fbx"]
+    assert metadata["validation"]["passed"] is True
+
 
 # Keep this test LAST in the file: it deliberately drains the shared
 # per-process token bucket, so any request-making test after it gets 429s.
