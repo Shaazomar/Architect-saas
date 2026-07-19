@@ -329,3 +329,83 @@ def test_stage5_auto_mode_never_leaves_rooms_empty(plan_png):
         for ox, oy in door_centers:
             d = ((px - ox) ** 2 + (py - oy) ** 2) ** 0.5
             assert d > 0.6, f"{f['item']} sits in a doorway (dist {d:.2f} m)"
+
+
+def _glb_json(glb: bytes) -> dict:
+    import json as _json
+    import struct as _struct
+
+    assert glb[:4] == b"glTF"
+    jlen = _struct.unpack("<I", glb[12:16])[0]
+    assert glb[16:20] == b"JSON"
+    return _json.loads(glb[20 : 20 + jlen])
+
+
+def test_stage6_pbr_materials_in_glb(plan_png):
+    result = run_pipeline(plan_png)
+    doc = _glb_json(result.glb)
+
+    mats = {m["name"]: m for m in doc["materials"]}
+    assert "wall_paint" in mats and "concrete" in mats
+    for m in mats.values():
+        pbr = m["pbrMetallicRoughness"]
+        assert "baseColorFactor" in pbr
+        assert 0.0 <= pbr["roughnessFactor"] <= 1.0
+        assert 0.0 <= pbr["metallicFactor"] <= 1.0
+    if "mirror" in mats:
+        assert mats["mirror"]["pbrMetallicRoughness"]["metallicFactor"] == 1.0
+
+    manifest = result.materials
+    assert manifest["stage"] == "materials"
+    assert manifest["workflow"] == "pbr_metallic_roughness"
+    # Every scene node has an assignment; floors follow the room type.
+    assert manifest["assignments"]["room_0_living_room"] == "marble_floor"
+    assert manifest["assignments"]["room_1_master_bedroom"] == "wood_floor"
+    assert manifest["assignments"]["room_2_bathroom"] == "ceramic_tile"
+    assert "pending" in manifest and "texture_maps" in manifest["pending"]
+
+
+def test_stage7_decor_present_but_bounded(plan_png):
+    result = run_pipeline(plan_png)
+
+    by_room: dict[int, list] = {}
+    for f in result.furniture:
+        by_room.setdefault(f["room_id"], []).append(f)
+
+    # The symbol-less master bedroom gets furnished including bed dressing.
+    bedroom_items = {f["item"] for f in by_room[1]}
+    assert {"pillow_left", "pillow_right", "blanket"} <= bedroom_items
+    # Never overdecorate: at most 5 decor pieces in any room.
+    for room_id, items in by_room.items():
+        decor_count = sum(1 for f in items if f.get("decor"))
+        assert decor_count <= 5, f"room {room_id} overdecorated ({decor_count})"
+
+
+def test_stage8_lights_embedded_in_glb(plan_png):
+    result = run_pipeline(plan_png)
+    doc = _glb_json(result.glb)
+
+    assert "KHR_lights_punctual" in doc["extensionsUsed"]
+    lights = doc["extensions"]["KHR_lights_punctual"]["lights"]
+    # One sun + one ceiling light per room.
+    assert len(lights) == 1 + len(result.rooms)
+    assert lights[0]["type"] == "directional"
+    assert all(l["type"] == "point" for l in lights[1:])
+
+    light_nodes = [n for n in doc["nodes"] if "KHR_lights_punctual" in n.get("extensions", {})]
+    assert len(light_nodes) == len(lights)
+    # Ceiling lights sit just under the 3.0 m ceiling, inside the building.
+    for n in light_nodes:
+        if "translation" in n:
+            x, y, z = n["translation"]
+            assert 2.5 < y < 3.0
+            assert 0 < x < 30 and 0 < z < 30
+
+    manifest = result.lighting
+    assert manifest["stage"] == "lighting"
+    assert len(manifest["lights"]) == len(lights)
+    assert "renderer_recommendations" in manifest
+
+    # The lit GLB still round-trips through a loader.
+    scene = trimesh.load(io.BytesIO(result.glb), file_type="glb")
+    assert len(scene.geometry) > 0

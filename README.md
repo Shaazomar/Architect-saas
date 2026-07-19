@@ -38,7 +38,9 @@ with `python -m app.devtools.sample_plan`.
 | GET | `/api/v1/jobs/{id}/rooms.json` | Stage 2 artifact: per-room polygon, center, name, area, doors, windows (pending), adjacency, confidence + evidence trail. |
 | GET | `/api/v1/jobs/{id}/graph.json` | Stage 3 artifact: semantic building graph — rooms as nodes, doors as typed edges, zones (public/private/service/circulation), hierarchy, accessibility from entrance. |
 | GET | `/api/v1/jobs/{id}/geometry.json` | Stage 4 artifact: generated element counts (walls, slab, roof, parapet, lintels, door frames, skirting), standards used, pending classes (windows/stairs). |
-| GET | `/api/v1/jobs/{id}/scene.json` | Stage 5 artifact: furnishing scene per room — items with source (detected/generated), placement rules (circulation + door clearance). |
+| GET | `/api/v1/jobs/{id}/scene.json` | Stage 5+7 artifact: furnishing + decor scene per room — items with source (detected/generated), decor flag, placement rules. |
+| GET | `/api/v1/jobs/{id}/materials.json` | Stage 6 artifact: PBR metallic-roughness materials with per-node assignments; texture maps declared pending. |
+| GET | `/api/v1/jobs/{id}/lighting.json` | Stage 8 artifact: lights embedded in the GLB (KHR_lights_punctual) + renderer recommendations (HDRI, exposure, shadows, AO). |
 | GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `obj`, `stl`, or `ply`. |
 | GET | `/health` | Liveness probe (public, unauthenticated). |
 
@@ -69,6 +71,11 @@ backend/app/pipeline/        one module per stage, typed contracts between them
                   position; symbol-less rooms are furnished — no empty rooms
   reconstruct.py  2D → 3D (Trimesh): walls, slab, roof + parapet, door
                   lintels/frames at detected openings, skirting, furniture
+  materials.py    PBR metallic-roughness materials chosen from what each
+                  element is (paint, marble/wood/ceramic floors, granite,
+                  mirror, glass, emissive LED); texture maps pending
+  lighting.py     per-room punctual lights + sun, injected into the GLB as
+                  KHR_lights_punctual (viewers load the model already lit)
   reports.py      room schedule, material take-off, indicative cost estimate
   validate.py     mesh integrity, scale plausibility, room reachability
   runner.py       orchestrator — pure function, Celery-ready

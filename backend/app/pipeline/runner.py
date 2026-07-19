@@ -14,6 +14,7 @@ from __future__ import annotations
 from .building_graph import build_semantic_graph
 from .classify import classify_rooms
 from .detect import detect_structure
+from .lighting import build_lights, inject_lights, lighting_manifest
 from .graph import build_graph
 from .ocr import NullOcr, OcrEngine
 from .openings import detect_openings
@@ -66,6 +67,12 @@ def run_pipeline(
         detected_objects=detected,
         openings=openings,
     )
+
+    # Stage 8 — embed punctual lights into the GLB before validation so the
+    # validated bytes are the shipped bytes.
+    lights = build_lights(plan_graph.rooms, effective_scale, settings.wall_height_m)
+    recon.scene_glb = inject_lights(recon.scene_glb, lights)
+
     validation = validate(recon, plan_graph)
 
     rooms = [
@@ -262,4 +269,6 @@ def run_pipeline(
         building_graph=semantic_graph,
         geometry=recon.geometry_manifest,
         furnishing=furnishing,
+        materials=recon.materials_manifest,
+        lighting=lighting_manifest(lights),
     )

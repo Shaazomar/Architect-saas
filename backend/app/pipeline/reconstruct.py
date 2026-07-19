@@ -20,21 +20,8 @@ from shapely.ops import unary_union
 
 from ..config import settings
 from .furniture import _oriented_box, place_furniture
+from .materials import MATERIALS, Material, apply_material, material_for
 from .types import ReconstructionResult, VectorPlan
-
-_LABEL_COLORS = {
-    "living_room": (196, 178, 152, 255),
-    "bedroom": (176, 190, 205, 255),
-    "master_bedroom": (176, 190, 205, 255),
-    "bathroom": (168, 205, 200, 255),
-    "common_toilet": (168, 205, 200, 255),
-    "kitchen": (205, 190, 170, 255),
-    "hallway": (205, 198, 176, 255),
-    "room": (190, 190, 190, 255),
-}
-_WALL_COLOR = (232, 230, 226, 255)
-_FRAME_COLOR = (110, 84, 60, 255)
-_SKIRTING_COLOR = (110, 100, 92, 255)
 
 _DOOR_HEAD_M = 2.1     # standard door head height
 _PARAPET_H_M = 0.9
@@ -87,10 +74,13 @@ def reconstruct(
         # Negative yfact: image Y grows downward, math Y grows upward.
         return aff.scale(geom, xfact=scale, yfact=-scale, origin=(0, 0))
 
-    def add(mesh: trimesh.Trimesh, name: str, color, z0: float = 0.0) -> None:
+    material_assignments: dict[str, str] = {}
+
+    def add(mesh: trimesh.Trimesh, name: str, mat: Material, z0: float = 0.0) -> None:
         if z0:
             mesh.apply_translation((0, 0, z0))
-        mesh.visual.face_colors = color
+        apply_material(mesh, mat)
+        material_assignments[name] = mat.name
         scene.add_geometry(_to_gltf_frame(mesh), node_name=name, geom_name=name)
 
     scene = trimesh.Scene()
@@ -98,22 +88,22 @@ def reconstruct(
     walls_m = to_m(vector.walls)
     wall_meshes = _extrude(walls_m, settings.wall_height_m)
     for i, m in enumerate(wall_meshes):
-        add(m, f"wall_{i}", _WALL_COLOR)
+        add(m, f"wall_{i}", MATERIALS["wall_paint"])
 
     # One slab under the whole footprint (walls + rooms), slightly below z=0.
     footprint = unary_union([walls_m] + [to_m(r.polygon) for r in vector.rooms]).buffer(scale * 2)
     for i, m in enumerate(_extrude(footprint, settings.slab_thickness_m)):
-        add(m, f"slab_{i}", (210, 205, 196, 255), z0=-settings.slab_thickness_m)
+        add(m, f"slab_{i}", MATERIALS["concrete"], z0=-settings.slab_thickness_m)
 
     # Per-room floor finish + skirting along the room boundary.
     for room in vector.rooms:
         room_m = to_m(room.polygon)
-        color = _LABEL_COLORS.get(room.label, _LABEL_COLORS["room"])
+        name = f"room_{room.id}_{room.label}"
         for m in _extrude(room_m, 0.02):
-            add(m, f"room_{room.id}_{room.label}", color)
+            add(m, name, material_for(name, room_label=room.label))
         ring = room_m.difference(room_m.buffer(-_SKIRTING_T_M))
         for j, m in enumerate(_extrude(ring, _SKIRTING_H_M)):
-            add(m, f"skirting_{room.id}_{j}", _SKIRTING_COLOR)
+            add(m, f"skirting_{room.id}_{j}", MATERIALS["wood_dark"])
 
     # Door lintels + frames at each *detected* opening: wall material above
     # the door head, and jamb posts on either side of the clear width.
@@ -124,7 +114,7 @@ def reconstruct(
         depth = max(o.depth_px * scale, 0.08)
         lintel = _oriented_box(cx, cy, width, depth, angle)
         for m in _extrude(lintel, settings.wall_height_m - _DOOR_HEAD_M):
-            add(m, f"lintel_{o.id}", _WALL_COLOR, z0=_DOOR_HEAD_M)
+            add(m, f"lintel_{o.id}", MATERIALS["wall_paint"], z0=_DOOR_HEAD_M)
         rad = math.radians(angle)
         ux, uy = math.cos(rad), math.sin(rad)
         for side, sgn in (("a", 1.0), ("b", -1.0)):
@@ -132,16 +122,16 @@ def reconstruct(
             py = cy + sgn * uy * (width / 2 - 0.04)
             post = _oriented_box(px, py, 0.08, depth + 0.04, angle)
             for m in _extrude(post, _DOOR_HEAD_M):
-                add(m, f"door_frame_{o.id}_{side}", _FRAME_COLOR)
+                add(m, f"door_frame_{o.id}_{side}", MATERIALS["wood_dark"])
 
     # Roof/ceiling slab + parapet, separately named so viewers can toggle.
     if include_roof:
         for i, m in enumerate(_extrude(footprint, settings.roof_thickness_m)):
-            add(m, f"roof_{i}", (188, 184, 178, 255), z0=settings.wall_height_m)
+            add(m, f"roof_{i}", MATERIALS["concrete"], z0=settings.wall_height_m)
         parapet_ring = footprint.difference(footprint.buffer(-_PARAPET_T_M))
         for i, m in enumerate(_extrude(parapet_ring, _PARAPET_H_M)):
             add(m, f"roof_parapet_{i}",
-                (188, 184, 178, 255), z0=settings.wall_height_m + settings.roof_thickness_m)
+                MATERIALS["wall_paint"], z0=settings.wall_height_m + settings.roof_thickness_m)
 
     # ---- Stage 5: furniture ----
     # Door clearance zones: no generated furniture inside them.
@@ -166,12 +156,13 @@ def reconstruct(
         for obj in objs:
             fp_m = to_m(obj.footprint_px)
             for m in _extrude(fp_m, obj.height_m):
-                add(m, f"furniture_{obj.room_id}_{obj.category}_{obj.id}", (150, 128, 108, 255))
+                add(m, f"furniture_{obj.room_id}_{obj.category}_{obj.id}",
+                    material_for("furniture", item=obj.category))
             cx, cy = fp_m.centroid.coords[0]
             furniture_report.append(
                 {
                     "room_id": obj.room_id, "room_label": obj.room_label,
-                    "item": obj.category, "source": "detected",
+                    "item": obj.category, "source": "detected", "decor": False,
                     "confidence": obj.confidence, "size_m": list(obj.size_m),
                     "rotation_deg": obj.rotation_deg, "height_m": obj.height_m,
                     "footprint_m2": round(fp_m.area, 2),
@@ -183,12 +174,14 @@ def reconstruct(
         room_m = to_m(room.polygon)
         for idx, item in enumerate(place_furniture(room.id, room.label, room_m, blocked)):
             for m in _extrude(item.footprint, item.height):
-                add(m, f"furniture_{item.room_id}_{item.name}_{idx}", item.color, z0=item.z0)
+                add(m, f"furniture_{item.room_id}_{item.name}_{idx}",
+                    material_for("furniture", item=item.name), z0=item.z0)
             cx, cy = item.footprint.centroid.coords[0]
             furniture_report.append(
                 {
                     "room_id": item.room_id, "room_label": item.room_label,
                     "item": item.name, "source": "generated", "confidence": None,
+                    "decor": item.decor,
                     "height_m": item.height, "z0_m": item.z0,
                     "footprint_m2": round(item.footprint.area, 2),
                     "position_m": [round(cx, 2), round(cy, 2)],
@@ -244,10 +237,31 @@ def reconstruct(
         "footprint_area_m2": float(footprint.area),
         "furniture_count": len(furniture_report),
     }
+    materials_manifest = {
+        "stage": "materials",
+        "workflow": "pbr_metallic_roughness",
+        "materials": {
+            name: {
+                "base_color": list(mat.base_color),
+                "metallic": mat.metallic,
+                "roughness": mat.roughness,
+                "emissive": list(mat.emissive) if mat.emissive else None,
+                "alpha_blend": mat.alpha_blend,
+            }
+            for name, mat in MATERIALS.items()
+            if name in set(material_assignments.values())
+        },
+        "assignments": material_assignments,
+        "pending": {
+            "texture_maps": "normal / AO / UV-mapped albedo maps pending the texture pipeline stage",
+        },
+    }
+
     return ReconstructionResult(
         scene_glb=glb,
         meters_per_px=scale,
         stats=stats,
         furniture=furniture_report,
         geometry_manifest=geometry_manifest,
+        materials_manifest=materials_manifest,
     )
