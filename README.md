@@ -6,7 +6,9 @@ blueprint: upload → preprocessing → structure detection → vectorization �
 room graph → classification → 3D reconstruction → validation → GLB export,
 with a FastAPI backend and a Next.js + React Three Fiber viewer.
 
-![pipeline](samples/sample_plan.png)
+| Input plan | Reconstructed + rendered by the pipeline |
+|---|---|
+| ![plan](samples/sample_plan.png) | ![isometric render](samples/isometric_45.png) |
 
 ## Quick start
 
@@ -41,6 +43,9 @@ with `python -m app.devtools.sample_plan`.
 | GET | `/api/v1/jobs/{id}/scene.json` | Stage 5+7 artifact: furnishing + decor scene per room — items with source (detected/generated), decor flag, placement rules. |
 | GET | `/api/v1/jobs/{id}/materials.json` | Stage 6 artifact: PBR metallic-roughness materials with per-node assignments; texture maps declared pending. |
 | GET | `/api/v1/jobs/{id}/lighting.json` | Stage 8 artifact: lights embedded in the GLB (KHR_lights_punctual) + renderer recommendations (HDRI, exposure, shadows, AO). |
+| GET | `/api/v1/jobs/{id}/cameras.json` | Stage 9 artifact: presentation cameras (also embedded in the GLB as glTF cameras) + door-depth-ordered walkthrough waypoints. |
+| GET | `/api/v1/jobs/{id}/renders.json` | Stage 10 artifact: rendered view manifest (pyrender rasterization at 4K by default; `ARCH_RENDER_WIDTH`/`HEIGHT` for 8K). |
+| GET | `/api/v1/jobs/{id}/renders/{name}.png` | A rendered view: top plan, isometric, bird's eye, elevations, per-room interiors. |
 | GET | `/api/v1/jobs/{id}/model.{fmt}` | The reconstructed 3D model — `glb`, `obj`, `stl`, or `ply`. |
 | GET | `/health` | Liveness probe (public, unauthenticated). |
 
@@ -77,7 +82,14 @@ backend/app/pipeline/        one module per stage, typed contracts between them
   lighting.py     per-room punctual lights + sun, injected into the GLB as
                   KHR_lights_punctual (viewers load the model already lit)
   reports.py      room schedule, material take-off, indicative cost estimate
-  validate.py     mesh integrity, scale plausibility, room reachability
+  cameras.py      presentation cameras (top/iso/elevations/interiors) +
+                  walkthrough path, embedded as glTF cameras
+  renders.py      pyrender subprocess: rasterized PBR-lit views to PNG;
+                  path-traced photorealism = pending Blender/Cycles stage
+  validate.py     Stage 11: watertightness, scale, wall height, floating
+                  meshes, overlaps, duplicates, material coverage — with
+                  auto-repair (only generated furniture may be removed;
+                  detected/drawn elements are never silently altered)
   runner.py       orchestrator — pure function, Celery-ready
 ```
 

@@ -98,3 +98,5 @@ class PipelineResult:
     materials: dict[str, Any] = field(default_factory=dict)
     # Stage 8 (Lighting AI) artifact: embedded lights + renderer settings.
     lighting: dict[str, Any] = field(default_factory=dict)
+    # Stage 9 (Camera AI) artifact: embedded cameras + walkthrough path.
+    cameras: dict[str, Any] = field(default_factory=dict)

@@ -1,21 +1,29 @@
 """Pipeline orchestrator: bytes in, PipelineResult out.
 
-Pure function of its inputs — no I/O besides CPU work — so it can run under
-FastAPI's threadpool today and inside a Celery worker unchanged tomorrow.
+Stage order matters:
+detection (1-3) -> geometry + furnishing (4-7) -> validation & repair (11,
+on the plain GLB so repairs re-export cleanly) -> light injection (8) ->
+camera injection (9) -> post-injection checks. Rendering (10) is I/O- and
+GPU-bound, so it runs in the API layer as a subprocess, not here — this
+function stays a pure function of its inputs and can move into a Celery
+worker unchanged.
 
 furniture_mode:
-  "detected"  (default) reconstruct only furniture symbols found in the
-              drawing, at their exact drawn position — nothing is invented;
-  "generated" opt-in constraint-based catalog placement for empty plans;
+  "auto"      (default) rooms keep their drawn symbols at exact position;
+              rooms with no symbols are furnished so no room is left empty;
+  "detected"  strictly what the drawing shows;
+  "generated" catalog placement everywhere;
   "none"      structure only.
 """
 from __future__ import annotations
 
+from ..config import settings
 from .building_graph import build_semantic_graph
+from .cameras import build_cameras, build_walkthrough, inject_cameras
 from .classify import classify_rooms
 from .detect import detect_structure
-from .lighting import build_lights, inject_lights, lighting_manifest
 from .graph import build_graph
+from .lighting import build_lights, inject_lights, lighting_manifest
 from .ocr import NullOcr, OcrEngine
 from .openings import detect_openings
 from .preprocess import preprocess
@@ -23,7 +31,7 @@ from .reconstruct import reconstruct
 from .reports import build_reports
 from .symbols import detect_symbols
 from .types import PipelineResult
-from .validate import validate
+from .validate import validate_and_repair
 from .vectorize import vectorize
 
 FURNITURE_MODES = ("auto", "detected", "generated", "none")
@@ -39,6 +47,7 @@ def run_pipeline(
         raise ValueError(f"furniture_mode must be one of {FURNITURE_MODES}")
     ocr = ocr or NullOcr()
 
+    # ---- Stages 1-3: detection and semantics ----
     plan = preprocess(image_bytes)
     structure = detect_structure(plan)
     vector = vectorize(plan, structure)
@@ -49,17 +58,27 @@ def run_pipeline(
     scale_source = "explicit" if meters_per_px else (
         "ocr" if ocr_result.meters_per_px else "wall_thickness_assumption"
     )
-
-    # Effective scale is needed by the classifier/detectors even when inferred.
-    from ..config import settings
-
     effective_scale = scale or (settings.wall_thickness_m / vector.wall_thickness_px)
 
     plan_graph = classify_rooms(plan_graph, effective_scale)
-
     openings = detect_openings(plan, structure, vector, effective_scale)
     detected = detect_symbols(plan, structure, vector, effective_scale)
 
+    openings_out = [
+        {
+            "id": o.id,
+            "kind": o.kind,
+            "width_m": o.width_m,
+            "rooms": o.rooms,
+            "center_px": list(o.center_px),
+            "swing_direction": None,  # needs the door-leaf symbol (ML stage)
+            "confidence": o.confidence,
+        }
+        for o in openings
+    ]
+    semantic_graph = build_semantic_graph(plan_graph, openings_out, effective_scale)
+
+    # ---- Stages 4-7: geometry, furnishing, materials ----
     recon = reconstruct(
         vector,
         meters_per_px=scale,
@@ -68,12 +87,35 @@ def run_pipeline(
         openings=openings,
     )
 
-    # Stage 8 — embed punctual lights into the GLB before validation so the
-    # validated bytes are the shipped bytes.
+    # ---- Stage 11: validate and auto-repair on the plain GLB ----
+    validation, repaired_glb = validate_and_repair(
+        recon,
+        plan_graph,
+        assignments=recon.materials_manifest.get("assignments"),
+        furniture_sources=recon.geometry_manifest.get("furniture_nodes"),
+    )
+    if repaired_glb is not None:
+        recon.scene_glb = repaired_glb
+        # Drop repaired (removed) pieces from the furniture report so the
+        # report matches the shipped scene. Node: furniture_{room}_{item}_{idx}
+        gone_prefixes = {n.rsplit("_", 1)[0] for n in validation.get("repaired_nodes", [])}
+        recon.furniture = [
+            f for f in recon.furniture
+            if f["source"] != "generated"
+            or f"furniture_{f['room_id']}_{f['item']}" not in gone_prefixes
+        ]
+
+    # ---- Stage 8: embed punctual lights ----
     lights = build_lights(plan_graph.rooms, effective_scale, settings.wall_height_m)
     recon.scene_glb = inject_lights(recon.scene_glb, lights)
 
-    validation = validate(recon, plan_graph)
+    # ---- Stage 9: embed cameras ----
+    cameras = build_cameras(plan_graph.rooms, effective_scale, settings.wall_height_m,
+                            semantic_graph["accessibility"])
+    walkthrough = build_walkthrough(plan_graph.rooms, effective_scale,
+                                    semantic_graph["accessibility"])
+    recon.scene_glb = inject_cameras(recon.scene_glb, cameras)
+    cameras_doc = {"stage": "cameras", "cameras": cameras, "walkthrough": walkthrough}
 
     rooms = [
         {
@@ -91,24 +133,8 @@ def run_pipeline(
         {"a": a, "b": b, "opening": bool(d.get("opening", False))}
         for a, b, d in plan_graph.graph.edges(data=True)
     ]
-    openings_out = [
-        {
-            "id": o.id,
-            "kind": o.kind,
-            "width_m": o.width_m,
-            "rooms": o.rooms,
-            "center_px": list(o.center_px),
-            "swing_direction": None,  # needs the door-leaf symbol (ML stage)
-            "confidence": o.confidence,
-        }
-        for o in openings
-    ]
 
-    # Stage 3 artifact — Semantic Building Graph.
-    semantic_graph = build_semantic_graph(plan_graph, openings_out, effective_scale)
-
-    # Stage 2 artifact — Room Detector: every room with polygon, center, name,
-    # area, doors, windows (pending), adjacency and confidence + evidence.
+    # Stage 2 artifact — Room Detector.
     rooms_detail = {
         "stage": "room_detection",
         "classifier": "heuristic_rules",
@@ -137,8 +163,6 @@ def run_pipeline(
     }
 
     # Stage 1 artifact — Floor Plan Analyzer: detection only, no geometry.
-    # Element classes we cannot detect yet are empty lists, never guesses;
-    # each carries a status naming the stage that will fill it.
     analysis = {
         "stage": "floor_plan_analysis",
         "detector": "classical_cv",
@@ -164,7 +188,7 @@ def run_pipeline(
                 "label_source": "heuristic",
                 "polygon_px": [[round(x, 1), round(y, 1)] for x, y in r.polygon.exterior.coords],
             }
-            for r in vector.rooms
+            for r in plan_graph.rooms
         ],
         "doors": openings_out,
         "windows": {"items": [], "status": "pending_ml_detector"},
@@ -214,6 +238,10 @@ def run_pipeline(
             "furniture_count": len(recon.furniture),
             "scale_source": scale_source,
             "scale_confidence": 0.9 if scale_source == "explicit" else 0.5,
+            "lights_embedded": len(lights),
+            "cameras_embedded": len(cameras),
+            "hierarchy_consistent": len(semantic_graph["nodes"]) == len(rooms),
+            "accessibility_ok": semantic_graph["accessibility"]["all_rooms_reachable"],
             "warnings": [
                 w
                 for w in (
@@ -223,14 +251,14 @@ def run_pipeline(
                     "Room labels are heuristic (adjacency/area); OCR and GNN stages pending."
                     if rooms
                     else None,
-                    "Window and door-swing symbols are not detected yet (ML stage pending)."
+                    "Window and door-swing symbols are not detected yet (ML stage pending).",
                 )
                 if w
             ],
         }
     )
 
-    # Stage 5 artifact — furnishing scene.
+    # Stage 5+7 artifact — furnishing + decor scene.
     furnishing = {
         "stage": "furnishing",
         "mode": furniture_mode,
@@ -271,4 +299,5 @@ def run_pipeline(
         furnishing=furnishing,
         materials=recon.materials_manifest,
         lighting=lighting_manifest(lights),
+        cameras=cameras_doc,
     )

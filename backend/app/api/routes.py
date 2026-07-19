@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import subprocess
+import sys
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -51,6 +54,8 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
         (job.dir / "scene.json").write_text(json.dumps(result.furnishing, indent=2))
         (job.dir / "materials.json").write_text(json.dumps(result.materials, indent=2))
         (job.dir / "lighting.json").write_text(json.dumps(result.lighting, indent=2))
+        (job.dir / "cameras.json").write_text(json.dumps(result.cameras, indent=2))
+        renders = _render_views(job)
         store.update_job(
             job_id,
             "done",
@@ -63,6 +68,7 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
                 "reports": result.reports,
                 "openings": result.openings,
                 "scene_graph": result.scene_graph,
+                "renders": renders,
             },
         )
     except PlanImageError as exc:
@@ -71,6 +77,36 @@ def _process(job_id: str, image_bytes: bytes, meters_per_px: float | None, furni
         # Never leak internals to the client; full trace goes to the log.
         log.exception("pipeline failed for job %s", job_id)
         store.update_job(job_id, "failed", error="Internal processing error.")
+
+
+def _render_views(job) -> dict:
+    """Stage 10: render the camera set to PNGs in a subprocess (GL contexts
+    must own a process main thread on macOS). Failure is graceful: the job
+    still completes and renders.json records the reason."""
+    if not settings.renders_enabled:
+        skipped = {"stage": "renders", "status": "skipped", "reason": "renders disabled by configuration"}
+        (job.dir / "renders.json").write_text(json.dumps(skipped, indent=2))
+        return skipped
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-m", "app.pipeline.renders",
+                str(job.dir / "model.glb"), str(job.dir / "cameras.json"),
+                str(job.dir / "renders"),
+                str(settings.render_width), str(settings.render_height),
+            ],
+            capture_output=True,
+            timeout=settings.render_timeout_s,
+            check=False,
+        )
+        manifest_path = job.dir / "renders.json"
+        if manifest_path.is_file():
+            return json.loads(manifest_path.read_text())
+    except Exception:
+        log.exception("render subprocess failed for job %s", job.id)
+    fallback = {"stage": "renders", "status": "failed", "reason": "renderer unavailable on this host"}
+    (job.dir / "renders.json").write_text(json.dumps(fallback, indent=2))
+    return fallback
 
 
 @router.post("/plans", status_code=202)
@@ -127,9 +163,23 @@ def _convert_model(glb_path, fmt: str) -> bytes:
 # Whitelisted per-stage artifacts. User input never reaches the filesystem:
 # the name must be an exact key here and the job id must exist in the store.
 _STAGE_ARTIFACTS = {
-    "analysis.json", "rooms.json", "graph.json",
-    "geometry.json", "scene.json", "materials.json", "lighting.json",
+    "analysis.json", "rooms.json", "graph.json", "geometry.json",
+    "scene.json", "materials.json", "lighting.json", "cameras.json", "renders.json",
 }
+_RENDER_NAME = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+@router.get("/jobs/{job_id}/renders/{name}.png")
+def job_render(job_id: str, name: str):
+    if not _RENDER_NAME.match(name):
+        raise HTTPException(404, "Render not found.")
+    job = store.get_job(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(404, "Render not found.")
+    path = job.dir / "renders" / f"{name}.png"
+    if not path.is_file():
+        raise HTTPException(404, "Render not found.")
+    return FileResponse(path, media_type="image/png", filename=f"{name}.png")
 
 
 @router.get("/jobs/{job_id}/{artifact}.json")

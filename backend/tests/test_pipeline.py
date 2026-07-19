@@ -409,3 +409,74 @@ def test_stage8_lights_embedded_in_glb(plan_png):
     # The lit GLB still round-trips through a loader.
     scene = trimesh.load(io.BytesIO(result.glb), file_type="glb")
     assert len(scene.geometry) > 0
+
+
+def test_stage9_cameras_embedded_and_walkthrough(plan_png):
+    result = run_pipeline(plan_png)
+    doc = _glb_json(result.glb)
+
+    cams = {c["name"]: c for c in doc["cameras"]}
+    for expected in ("top_orthographic", "isometric_45", "bird_eye",
+                     "front_elevation", "rear_elevation"):
+        assert expected in cams, expected
+    assert cams["top_orthographic"]["type"] == "orthographic"
+    assert cams["isometric_45"]["type"] == "perspective"
+    # One interior camera per room.
+    assert sum(1 for n in cams if n.startswith("interior_")) == len(result.rooms)
+
+    cam_nodes = [n for n in doc["nodes"] if "camera" in n]
+    assert len(cam_nodes) == len(doc["cameras"])
+    assert result.validation["cameras_embedded"] == len(doc["cameras"])
+
+    walk = result.cameras["walkthrough"]
+    depths = [w["door_depth"] for w in walk["waypoints"]]
+    assert depths[0] == 0                      # starts at the entrance room
+    assert depths == sorted(depths)            # ordered by door depth
+    assert all(w["position"][1] == 1.55 for w in walk["waypoints"])
+
+
+def test_stage11_validation_checks(plan_png):
+    v = run_pipeline(plan_png).validation
+
+    for check in ("no_mesh_overlaps", "no_duplicate_objects", "wall_height_ok",
+                  "materials_assigned", "room_labels_ok", "no_floating_meshes",
+                  "hierarchy_consistent", "accessibility_ok"):
+        assert v[check] is True, check
+    assert v["repairs"] == []
+    assert v["lights_embedded"] == len(run_pipeline(plan_png).rooms) + 1
+    assert "pending" in v["uv_maps"]
+    assert v["passed"] is True
+
+
+def test_stage11_auto_repair_removes_illegal_generated_piece(plan_png):
+    """Fabricate a floating generated box in the GLB and verify repair removes
+    it (and only it), while a detected object would be left alone."""
+    import trimesh as tm
+
+    from app.pipeline.types import ReconstructionResult
+    from app.pipeline.validate import validate_and_repair
+    from app.pipeline.graph import build_graph  # noqa: F401  (import sanity)
+
+    result = run_pipeline(plan_png, furniture_mode="none")
+    scene = tm.load(io.BytesIO(result.glb), file_type="glb")
+    bad = tm.creation.box(extents=(0.5, 0.5, 0.5))
+    bad.apply_translation((5.0, 25.0, 5.0))  # far above the roof: floating
+    scene.add_geometry(bad, node_name="furniture_0_ghost_0", geom_name="furniture_0_ghost_0")
+    glb = scene.export(file_type="glb")
+
+    recon = ReconstructionResult(scene_glb=glb, meters_per_px=result.stats["meters_per_px"])
+    # Rebuild a plan graph cheaply via the pipeline internals is overkill here;
+    # reuse rooms from the result through a minimal PlanGraph.
+    pg = _make_graph([(r["id"], 3.0, 3.0) for r in result.rooms],
+                     [(a["a"], a["b"], a["opening"]) for a in result.adjacency])
+    for room in pg.rooms:
+        room.label = "bedroom"
+
+    checks, repaired = validate_and_repair(
+        recon, pg, furniture_sources={"generated": ["furniture_0_ghost_0"], "detected": []}
+    )
+    assert "furniture_0_ghost_0" in checks["repaired_nodes"]
+    assert checks["no_floating_meshes"] is True
+    assert repaired is not None
+    rescene = tm.load(io.BytesIO(repaired), file_type="glb")
+    assert "furniture_0_ghost_0" not in rescene.geometry

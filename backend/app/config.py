@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # no explicit scale annotation.
     wall_thickness_m: float = 0.23
 
+    # --- presentation renders (Stage 10); 4K default, 8K via env ---
+    renders_enabled: bool = True
+    render_width: int = 3840
+    render_height: int = 2160
+    render_timeout_s: int = 600
+
     # --- indicative construction rates for the cost report ---
     currency: str = "INR"
     rate_concrete_per_m3: float = 7500.0

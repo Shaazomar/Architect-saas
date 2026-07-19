@@ -14,8 +14,11 @@ def plan_png() -> bytes:
 
 @pytest.fixture()
 def isolated_data_dir(tmp_path, monkeypatch):
-    """Point the job store at a throwaway directory and reset its connection."""
+    """Point the job store at a throwaway directory and reset its connection.
+    Renders are disabled by default (each would spawn a GL subprocess); the
+    dedicated render test re-enables them at a small resolution."""
     store.close()
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "renders_enabled", False)
     yield tmp_path / "data"
     store.close()

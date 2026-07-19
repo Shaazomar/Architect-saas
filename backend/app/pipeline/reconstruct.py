@@ -151,13 +151,15 @@ def reconstruct(
         detected_by_room.setdefault(obj.room_id, []).append(obj)
 
     furniture_report: list[dict] = []
+    furniture_nodes: dict[str, list[str]] = {"detected": [], "generated": []}
 
     def add_detected(objs) -> None:
         for obj in objs:
             fp_m = to_m(obj.footprint_px)
+            name = f"furniture_{obj.room_id}_{obj.category}_{obj.id}"
+            furniture_nodes["detected"].append(name)
             for m in _extrude(fp_m, obj.height_m):
-                add(m, f"furniture_{obj.room_id}_{obj.category}_{obj.id}",
-                    material_for("furniture", item=obj.category))
+                add(m, name, material_for("furniture", item=obj.category))
             cx, cy = fp_m.centroid.coords[0]
             furniture_report.append(
                 {
@@ -173,9 +175,10 @@ def reconstruct(
     def add_generated(room) -> None:
         room_m = to_m(room.polygon)
         for idx, item in enumerate(place_furniture(room.id, room.label, room_m, blocked)):
+            name = f"furniture_{item.room_id}_{item.name}_{idx}"
+            furniture_nodes["generated"].append(name)
             for m in _extrude(item.footprint, item.height):
-                add(m, f"furniture_{item.room_id}_{item.name}_{idx}",
-                    material_for("furniture", item=item.name), z0=item.z0)
+                add(m, name, material_for("furniture", item=item.name), z0=item.z0)
             cx, cy = item.footprint.centroid.coords[0]
             furniture_report.append(
                 {
@@ -225,6 +228,7 @@ def reconstruct(
             "window_frames_glass": "no windows detected; window detector pending",
             "stairs": "stair detector pending",
         },
+        "furniture_nodes": furniture_nodes,
     }
 
     bounds = scene.bounds

@@ -103,6 +103,32 @@ def test_analysis_artifact_endpoint(client, plan_png):
     assert client.get(f"/api/v1/jobs/{job_id}/secrets.json").status_code == 404
 
 
+def test_stage10_renders_through_api(client, plan_png, monkeypatch):
+    monkeypatch.setattr(settings, "renders_enabled", True)
+    monkeypatch.setattr(settings, "render_width", 320)
+    monkeypatch.setattr(settings, "render_height", 180)
+
+    job_id = client.post(
+        "/api/v1/plans", files={"file": ("plan.png", plan_png, "image/png")}
+    ).json()["job_id"]
+
+    status = client.get(f"/api/v1/jobs/{job_id}").json()
+    renders = status["result"]["renders"]
+    assert renders["status"] == "ok", renders
+    names = {v["name"] for v in renders["views"]}
+    assert {"top_orthographic", "isometric_45", "front_elevation"} <= names
+
+    png = client.get(f"/api/v1/jobs/{job_id}/renders/top_orthographic.png")
+    assert png.status_code == 200
+    assert png.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(png.content) > 1000
+
+    assert client.get(f"/api/v1/jobs/{job_id}/renders/../evil.png").status_code == 404
+    assert client.get(f"/api/v1/jobs/{job_id}/renders/nope.png").status_code == 404
+    manifest = client.get(f"/api/v1/jobs/{job_id}/renders.json")
+    assert manifest.status_code == 200 and manifest.json()["status"] == "ok"
+
+
 # Keep this test LAST in the file: it deliberately drains the shared
 # per-process token bucket, so any request-making test after it gets 429s.
 def test_rate_limit_kicks_in(client):
